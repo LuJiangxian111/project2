@@ -12,6 +12,64 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { join } from 'path';
+import * as XLSX from 'xlsx';
+
+// 解析上传文件为结构化数据
+function parseFileToRows(file: Express.Multer.File): { headers: string[]; rows: Record<string, string>[]; sampleText: string } {
+  if (!file || !file.buffer) return { headers: [], rows: [], sampleText: '' };
+  const ext = (file.originalname || '').split('.').pop()?.toLowerCase();
+
+  if (ext === 'xlsx' || ext === 'xls') {
+    const workbook = XLSX.read(file.buffer, { type: 'buffer', codepage: 65001 });
+    const sheetName = workbook.SheetNames[0]; // 取第一个工作表
+    const sheet = workbook.Sheets[sheetName];
+    const jsonData: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+
+    if (jsonData.length < 2) return { headers: [], rows: [], sampleText: '' };
+
+    const headers = jsonData[0].map((h) => String(h).trim());
+    console.log(`[AI] parseFile headers sample:`, headers.slice(0, 5));
+    console.log(`[AI] parseFile row1 sample:`, jsonData[1]?.slice(0, 5));
+    const rows: Record<string, string>[] = [];
+    for (let i = 1; i < jsonData.length; i++) {
+      const obj: Record<string, string> = {};
+      headers.forEach((h, idx) => {
+        obj[h] = String(jsonData[i][idx] ?? '').trim();
+      });
+      // 跳过全空行
+      if (Object.values(obj).some((v) => v)) {
+        rows.push(obj);
+      }
+    }
+
+    // 生成样本文本给 AI（表头 + 前5行）
+    const sampleRows = rows.slice(0, 5);
+    const sampleLines = [headers.join(','), ...sampleRows.map((r) => headers.map((h) => r[h]).join(','))];
+    const sampleText = sampleLines.join('\n') + (rows.length > 5 ? `\n... (共${rows.length}行数据)` : '');
+
+    return { headers, rows, sampleText };
+  }
+
+  // 其他文本文件
+  const text = file.buffer.toString('utf-8');
+  const lines = text.split('\n').filter((l) => l.trim());
+  if (lines.length < 2) return { headers: [], rows: [], sampleText: text.substring(0, 3000) };
+
+  const headers = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
+  const rows: Record<string, string>[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(',').map((v) => v.trim().replace(/^"|"$/g, ''));
+    const obj: Record<string, string> = {};
+    headers.forEach((h, idx) => { obj[h] = values[idx] || ''; });
+    if (Object.values(obj).some((v) => v)) rows.push(obj);
+  }
+
+  const sampleRows = rows.slice(0, 5);
+  const sampleLines = [headers.join(','), ...sampleRows.map((r) => headers.map((h) => r[h]).join(','))];
+  const sampleText = sampleLines.join('\n') + (rows.length > 5 ? `\n... (共${rows.length}行数据)` : '');
+
+  return { headers, rows, sampleText };
+}
 
 @Controller('ai')
 @UseGuards(JwtAuthGuard)
@@ -20,10 +78,87 @@ export class AiController {
 
   @Post('chat')
   async chat(
-    @Body() body: { messages: { role: string; content: string }[] },
+    @Body() body: { message?: string; messages?: { role: string; content: string }[] },
     @CurrentUser() user: any,
   ) {
-    return this.aiService.chat(body.messages, user.id);
+    // 兼容前端发送 message 字符串或 messages 数组
+    let messages: { role: string; content: string }[];
+    if (body.messages && Array.isArray(body.messages)) {
+      messages = body.messages;
+    } else if (body.message) {
+      messages = [{ role: 'user', content: body.message }];
+    } else {
+      messages = [];
+    }
+    return this.aiService.chat(messages, user.id);
+  }
+
+  @Post('analyze-file')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  async analyzeFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { instruction?: string },
+    @CurrentUser() user: any,
+  ) {
+    try {
+      const { headers, rows, sampleText } = parseFileToRows(file);
+      const fileName = Buffer.from(file?.originalname || '未知文件', 'latin1').toString('utf-8');
+      const instruction = body.instruction || '';
+
+      if (!rows.length) {
+        return { type: 'unknown', items: [], rawContent: '', summary: '文件内容为空，请确认文件格式' };
+      }
+
+      console.log(`[AI] analyzeFile: fileName=${fileName}, rows=${rows.length}, headers=${headers.join(',')}`);
+
+      // 只发送样本给 AI 做字段映射
+      const aiResult: any = await this.aiService.analyzeFileForImport(sampleText, fileName, instruction, user.id);
+
+      // AI 返回了映射关系，用全量数据在后端本地映射
+      if ((aiResult.type === 'position' || aiResult.type === 'candidate') && aiResult.fieldMapping) {
+        const mapping = aiResult.fieldMapping; // { 原始列名: 系统标准字段名 }
+        const items = rows.map((row) => {
+          const mapped: Record<string, string> = {};
+          for (const [srcField, targetField] of Object.entries(mapping)) {
+            if (row[srcField] !== undefined) {
+              mapped[targetField as string] = row[srcField];
+            }
+          }
+          return mapped;
+        }).filter((item) => Object.values(item).some((v) => v));
+
+        return {
+          type: aiResult.type,
+          items,
+          unmappedFields: aiResult.unmappedFields,
+          summary: aiResult.summary,
+        };
+      }
+
+      // AI 没有返回 fieldMapping，回退
+      return aiResult;
+    } catch (err: any) {
+      console.error('analyze-file error:', err?.message || err);
+      return { type: 'unknown', items: [], rawContent: '', summary: `分析失败: ${err?.message || '未知错误'}` };
+    }
+  }
+
+  @Post('chat-with-file')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  async chatWithFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { messages?: string },
+    @CurrentUser() user: any,
+  ) {
+    let messages: { role: string; content: string }[] = [];
+    try {
+      messages = body.messages ? JSON.parse(body.messages) : [];
+    } catch { /* ignore */ }
+
+    const fileContent = extractFileContent(file);
+    const fileName = file?.originalname || '未知文件';
+
+    return this.aiService.chatWithFile(messages, fileContent, fileName, user.id);
   }
 
   @Post('parse-resume')
@@ -42,9 +177,7 @@ export class AiController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: any,
   ) {
-    const fileContent = file.buffer
-      ? file.buffer.toString('utf-8')
-      : '';
+    const fileContent = extractFileContent(file);
     return this.aiService.parseResume(fileContent || file.originalname, user.id);
   }
 
@@ -92,9 +225,7 @@ export class AiController {
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: any,
   ) {
-    const fileContent = file.buffer
-      ? file.buffer.toString('utf-8')
-      : '';
+    const fileContent = extractFileContent(file);
     const fileType = file.originalname.split('.').pop() || 'txt';
     return this.aiService.importFile(fileContent, fileType, user.id);
   }

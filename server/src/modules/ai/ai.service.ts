@@ -375,6 +375,153 @@ ${positions
     }
   }
 
+  async analyzeFileForImport(fileContent: string, fileName: string, instruction: string, userId: number) {
+    const { client, model } = await this.getClient(userId);
+
+    const prompt = `你是一个数据导入助手。请分析以下文件样本数据，识别其中的数据是"岗位需求"还是"候选人推荐"，然后建立字段映射关系。
+
+系统岗位需求标准字段：
+- systemName: 系统
+- department: 部门
+- requirementNumber: 需求编号
+- positionType: 岗位类型
+- positionDuty: 岗位职务
+- techDomain: 技术领域
+- majorType: 专业类型
+- levelDistribution: 职级分布
+- salaryRange: 薪资范围
+- requirements: 岗位要求
+- responsibilities: 岗位职责
+- domainExperience: 领域经验
+- region: 地区
+- deliveryForm: 交付形式
+- positionImplementation: 岗位实施
+- urgency: 紧急程度(low/medium/high/critical)
+- requiredCount: 需求人数
+- expectedDate: 期望到岗日期
+
+系统候选人标准字段：
+- name: 姓名
+- gender: 性别
+- idType: 证件类型
+- idNumber: 证件号码
+- contactPhone: 联系电话
+- contactEmail: 联系邮箱
+- areaCode: 区号
+- supplier: 供应商
+- educationType: 学历类型
+- education: 学历
+- graduationDate: 毕业时间
+- domainYears: 领域年限
+- workStatus: 工作状态
+- expectedSalary: 期望薪资
+
+请返回JSON格式：
+{
+  "type": "position" 或 "candidate",
+  "fieldMapping": { "文件中的列名1": "系统标准字段名1", "文件中的列名2": "系统标准字段名2", ... },
+  "unmappedFields": { "无法映射的列名": "示例值" },
+  "summary": "文件内容摘要"
+}
+
+注意事项：
+1. fieldMapping 中键是文件中的原始列名，值是对应的系统标准字段名
+2. 尽可能将文件中的每个列映射到系统标准字段
+3. 无法映射的列放在 unmappedFields 中
+4. 如果用户有额外指令，优先按用户指令处理
+5. 只返回JSON，不要返回其他内容
+
+${instruction ? `用户指令：${instruction}\n\n` : ''}文件名：${fileName}
+
+文件样本数据：
+${fileContent}`;
+
+    console.log(`[AI] analyzeFileForImport: fileName=${fileName}, contentLen=${fileContent.length}, model=${model}`);
+
+    let response;
+    try {
+      response = await client.chat.completions.create({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.2,
+        timeout: 180000,
+      });
+    } catch (apiErr: any) {
+      console.error('[AI] analyzeFileForImport API error:', apiErr?.message || apiErr);
+      throw apiErr;
+    }
+
+    const content = response.choices[0]?.message?.content || '{}';
+    console.log(`[AI] analyzeFileForImport response length: ${content.length}, preview: ${content.substring(0, 200)}`);
+
+    await this.logService.log(userId, 'analyze_file_for_import', 'ai', null, {
+      model,
+      fileName,
+    });
+
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      return jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(content);
+    } catch {
+      return { type: 'unknown', items: [], rawContent: content, summary: '解析失败' };
+    }
+  }
+
+  async chatWithFile(
+    messages: { role: string; content: string }[],
+    fileContent: string,
+    fileName: string,
+    userId: number,
+  ) {
+    const { client, model } = await this.getClient(userId);
+
+    // 截断过长的文件内容
+    const truncatedContent = fileContent.length > 30000
+      ? fileContent.substring(0, 30000) + '\n\n... (文件内容过长，已截断)'
+      : fileContent;
+
+    // 将文件内容注入到用户消息中
+    const enrichedMessages = messages.map((msg) => {
+      if (msg.role === 'user' && msg.content) {
+        return {
+          ...msg,
+          content: `用户上传了文件"${fileName}"，文件内容如下：\n${truncatedContent}\n\n用户消息：${msg.content}`,
+        };
+      }
+      return msg;
+    });
+
+    // 如果没有用户消息，只有文件
+    const hasUserMsg = messages.some((m) => m.role === 'user' && m.content.trim());
+    const finalMessages = hasUserMsg
+      ? enrichedMessages
+      : [
+          {
+            role: 'user' as const,
+            content: `用户上传了文件"${fileName}"，文件内容如下：\n${truncatedContent}\n\n请分析这个文件的内容，提取关键信息并给出你的见解。`,
+          },
+        ];
+
+    const response = await client.chat.completions.create({
+      model,
+      messages: finalMessages as any,
+      temperature: 0.5,
+      timeout: 120000,
+    });
+
+    await this.logService.log(userId, 'ai_chat_with_file', 'ai', null, {
+      model,
+      fileName,
+      messageCount: messages.length,
+    });
+
+    return {
+      content: response.choices[0]?.message?.content,
+      model: response.model,
+      usage: response.usage,
+    };
+  }
+
   async importFile(fileContent: string, fileType: string, userId: number) {
     const { client, model } = await this.getClient(userId);
 

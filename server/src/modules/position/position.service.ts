@@ -104,6 +104,32 @@ export class PositionService {
       mapped.requiredCount = mapped.headcount;
       delete mapped.headcount;
     }
+    // 确保必填字段有默认值（AI导入时可能缺失）
+    mapped.systemName = mapped.systemName || '未指定';
+    mapped.department = mapped.department || '未指定';
+    mapped.requirementNumber = mapped.requirementNumber || '未指定';
+    mapped.positionType = mapped.positionType || '未指定';
+    mapped.positionDuty = mapped.positionDuty || '未指定';
+    mapped.techDomain = mapped.techDomain || '未指定';
+    mapped.majorType = mapped.majorType || '未指定';
+    mapped.levelDistribution = mapped.levelDistribution || '未指定';
+    mapped.requirements = mapped.requirements || '待补充';
+    mapped.responsibilities = mapped.responsibilities || '待补充';
+    mapped.domainExperience = mapped.domainExperience || '待补充';
+    mapped.region = mapped.region || '未指定';
+    mapped.deliveryForm = mapped.deliveryForm || '未指定';
+    mapped.requiredCount = mapped.requiredCount || 1;
+    mapped.projectId = mapped.projectId || data.projectId;
+    // 校验 urgency 枚举值
+    const validUrgency = ['low', 'medium', 'high', 'critical'];
+    if (!mapped.urgency || !validUrgency.includes(mapped.urgency)) {
+      mapped.urgency = 'medium';
+    }
+    // 校验 status 枚举值
+    const validStatus = ['open', 'partial', 'filled', 'closed'];
+    if (mapped.status && !validStatus.includes(mapped.status)) {
+      delete mapped.status;
+    }
     const position = this.positionRepository.create(mapped) as unknown as Position;
     position.creatorId = userId;
     const result: any = await this.positionRepository.save(position);

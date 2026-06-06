@@ -43,7 +43,38 @@ export class PositionController {
     @Body() body: Partial<any>,
     @CurrentUser() user: any,
   ) {
-    return this.positionService.create(body, user.id);
+    console.log('[Position] create body keys:', Object.keys(body), 'projectId:', body.projectId);
+    try {
+      const result = await this.positionService.create(body, user.id);
+      return result;
+    } catch (err: any) {
+      console.error('[Position] create error:', err?.message || err);
+      throw err;
+    }
+  }
+
+  @Post('batch-import')
+  async batchImport(
+    @Body() body: { items: any[]; projectId: number },
+    @CurrentUser() user: any,
+  ) {
+    const { items, projectId } = body;
+    let success = 0;
+    let failed = 0;
+    const errors: string[] = [];
+
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const item = { ...items[i], projectId };
+        await this.positionService.create(item, user.id);
+        success++;
+      } catch (err: any) {
+        failed++;
+        errors.push(`第${i + 1}条: ${err?.message || '未知错误'}`);
+      }
+    }
+
+    return { success, failed, errors };
   }
 
   @Get(':id')

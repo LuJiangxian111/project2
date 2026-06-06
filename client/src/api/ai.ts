@@ -3,6 +3,20 @@ import request from './request';
 export const chatWithAI = (message: string, context?: string) =>
   request.post('/ai/chat', { message, context });
 
+export const chatWithFile = (file: File, messages: { role: string; content: string }[]) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('messages', JSON.stringify(messages));
+  return request.post('/ai/chat-with-file', formData, { timeout: 180000 });
+};
+
+export const analyzeFile = (file: File, instruction?: string) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  if (instruction) formData.append('instruction', instruction);
+  return request.post('/ai/analyze-file', formData, { timeout: 180000 });
+};
+
 export const parseResume = (file: File) => {
   const formData = new FormData();
   formData.append('file', file);
