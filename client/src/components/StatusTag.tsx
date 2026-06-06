@@ -20,12 +20,13 @@ const positionStatusMap: Record<string, { color: string; label: string }> = {
 };
 
 const candidateStatusMap: Record<string, { color: string; label: string }> = {
-  pending: { color: 'default', label: '待评估' },
-  screening: { color: 'blue', label: '筛选中' },
-  interviewing: { color: 'orange', label: '面试中' },
-  offered: { color: 'green', label: '已发Offer' },
-  rejected: { color: 'red', label: '已拒绝' },
-  hired: { color: 'cyan', label: '已录用' },
+  pending_screen: { color: 'default', label: '待筛选' },
+  screen_rejected: { color: 'red', label: '筛选不通过' },
+  screen_passed: { color: 'blue', label: '筛选通过待约面' },
+  pending_interview: { color: 'orange', label: '待面试' },
+  interview_passed: { color: 'green', label: '面试通过' },
+  interview_rejected: { color: 'volcano', label: '面试不通过' },
+  abandoned: { color: 'default', label: '放弃面试' },
 };
 
 const interviewStatusMap: Record<string, { color: string; label: string }> = {

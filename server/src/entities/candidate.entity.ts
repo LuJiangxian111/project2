@@ -16,32 +16,50 @@ export class Candidate {
   @Column()
   name: string;
 
-  @Column({ nullable: true })
-  phone: string;
+  @Column({ name: 'id_type', length: 50, nullable: true })
+  idType: string;
 
-  @Column({ nullable: true })
-  email: string;
+  @Column({ name: 'id_number', length: 100, nullable: true })
+  idNumber: string;
+
+  @Column({ length: 10, nullable: true })
+  gender: string;
+
+  @Column({ name: 'contact_phone', length: 50, nullable: true })
+  contactPhone: string;
+
+  @Column({ name: 'contact_email', length: 200, nullable: true })
+  contactEmail: string;
+
+  @Column({ name: 'area_code', length: 20, nullable: true })
+  areaCode: string;
+
+  @Column({ name: 'education_type', length: 50, nullable: true })
+  educationType: string;
+
+  @Column({ length: 50, nullable: true })
+  education: string;
+
+  @Column({ name: 'graduation_date', type: 'date', nullable: true })
+  graduationDate: Date;
+
+  @Column({ name: 'domain_years', nullable: true })
+  domainYears: number;
+
+  @Column({ name: 'work_status', length: 50, nullable: true })
+  workStatus: string;
+
+  @Column({ name: 'expected_salary', length: 100, nullable: true })
+  expectedSalary: string;
+
+  @Column({ name: 'supplier', length: 200, nullable: true })
+  supplier: string;
 
   @Column({ name: 'resume_url', nullable: true })
   resumeUrl: string;
 
   @Column({ name: 'resume_text', type: 'text', nullable: true })
   resumeText: string;
-
-  @Column({ nullable: true })
-  source: string;
-
-  @Column({ name: 'years_of_experience', nullable: true })
-  yearsOfExperience: number;
-
-  @Column({ name: 'current_company', nullable: true })
-  currentCompany: string;
-
-  @Column({ type: 'text', nullable: true })
-  skills: string;
-
-  @Column({ nullable: true })
-  education: string;
 
   @OneToMany(() => CandidatePosition, (cp) => cp.candidate)
   candidatePositions: CandidatePosition[];

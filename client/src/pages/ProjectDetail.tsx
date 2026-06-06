@@ -126,7 +126,7 @@ export default function ProjectDetail() {
                       {
                         title: '需求/已录用',
                         key: 'headcount',
-                        render: (_: any, r: any) => `${r.hiredCount || 0}/${r.headcount || 0}`,
+                        render: (_: any, r: any) => `${r.hiredCount || 0}/${r.requiredCount || 0}`,
                       },
                       {
                         title: '状态',

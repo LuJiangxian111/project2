@@ -80,26 +80,33 @@ export default function PositionDetail() {
 
       <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
         <Card style={{ borderRadius: 8, flex: '1 1 400px', minWidth: 300 }}>
-          <Descriptions title={position.title} column={1}>
-            <Descriptions.Item label="所属项目">{position.projectName || '-'}</Descriptions.Item>
-            <Descriptions.Item label="状态"><StatusTag status={position.status} type="position" /></Descriptions.Item>
+          <Descriptions title={position.positionDuty} column={2}>
+            <Descriptions.Item label="系统">{position.systemName || '-'}</Descriptions.Item>
+            <Descriptions.Item label="部门">{position.department || '-'}</Descriptions.Item>
+            <Descriptions.Item label="需求编号">{position.requirementNumber || '-'}</Descriptions.Item>
+            <Descriptions.Item label="所属项目">{position.project?.name || '-'}</Descriptions.Item>
+            <Descriptions.Item label="岗位类型">{position.positionType || '-'}</Descriptions.Item>
+            <Descriptions.Item label="岗位职务">{position.positionDuty || '-'}</Descriptions.Item>
+            <Descriptions.Item label="技术领域">{position.techDomain || '-'}</Descriptions.Item>
+            <Descriptions.Item label="专业类型">{position.majorType || '-'}</Descriptions.Item>
+            <Descriptions.Item label="职级分布">{position.levelDistribution || '-'}</Descriptions.Item>
+            <Descriptions.Item label="薪资范围">{position.salaryRange || '面议'}</Descriptions.Item>
+            <Descriptions.Item label="地区">{position.region || '-'}</Descriptions.Item>
+            <Descriptions.Item label="交付形式">{position.deliveryForm || '-'}</Descriptions.Item>
             <Descriptions.Item label="紧急程度">
               {({ low: '低', medium: '中', high: '高', critical: '紧急' } as any)[position.urgency] || position.urgency}
             </Descriptions.Item>
-            <Descriptions.Item label="薪资范围">
-              {position.salaryMin || position.salaryMax
-                ? `${position.salaryMin || '?'}K - ${position.salaryMax || '?'}K`
-                : '面议'}
-            </Descriptions.Item>
-            <Descriptions.Item label="工作地点">{position.location || '-'}</Descriptions.Item>
-            <Descriptions.Item label="需求/已录用">
-              {position.headcount || 0} / {position.hiredCount || 0}
+            <Descriptions.Item label="状态"><StatusTag status={position.status} type="position" /></Descriptions.Item>
+            <Descriptions.Item label="需求/已推荐/已录用/缺口">
+              {position.requiredCount || 0} / {candidates.length} / {position.hiredCount || 0} / {Math.max(0, (position.requiredCount || 0) - (position.hiredCount || 0))}
             </Descriptions.Item>
             <Descriptions.Item label="期望到岗日期">
               {position.expectedDate ? position.expectedDate.substring(0, 10) : '-'}
             </Descriptions.Item>
-            <Descriptions.Item label="岗位描述">{position.description || '暂无描述'}</Descriptions.Item>
-            <Descriptions.Item label="岗位要求">{position.requirements || '暂无要求'}</Descriptions.Item>
+            <Descriptions.Item label="岗位要求" span={2}>{position.requirements || '暂无'}</Descriptions.Item>
+            <Descriptions.Item label="岗位职责" span={2}>{position.responsibilities || '暂无'}</Descriptions.Item>
+            <Descriptions.Item label="领域经验" span={2}>{position.domainExperience || '暂无'}</Descriptions.Item>
+            <Descriptions.Item label="岗位实施" span={2}>{position.positionImplementation || '暂无'}</Descriptions.Item>
           </Descriptions>
         </Card>
 
@@ -133,10 +140,11 @@ export default function PositionDetail() {
             columns={[
               {
                 title: '姓名',
-                dataIndex: 'candidateName',
                 key: 'candidateName',
-                render: (text: string, record: any) => (
-                  <a onClick={() => navigate(`/candidates/${record.candidateId || record.id}`)}>{text || record.name}</a>
+                render: (_: any, record: any) => (
+                  <a onClick={() => navigate(`/candidates/${record.candidateId || record.id}`)}>
+                    {record.candidate?.name || record.candidateName || '-'}
+                  </a>
                 ),
               },
               {

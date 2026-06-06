@@ -31,7 +31,7 @@ export class Project {
   @Column({ name: 'end_date', type: 'date', nullable: true })
   endDate: Date;
 
-  @Column({ name: 'manager_id' })
+  @Column({ name: 'manager_id', nullable: true })
   managerId: number;
 
   @ManyToOne(() => User, (user) => user.managedProjects)

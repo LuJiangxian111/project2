@@ -1,253 +1,272 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Table, Input, Button, Space, Popconfirm, Tag, message, Modal, Form, Select, InputNumber } from 'antd';
-import { SearchOutlined, PlusOutlined } from '@ant-design/icons';
-import { getCandidates, createCandidate, deleteCandidate, updateCandidate } from '../api/candidate';
-import { matchCandidate } from '../api/candidate';
+import { useEffect, useState, useCallback } from 'react';
+import {
+  Table, Input, Button, Space, Tag, Select, Badge,
+} from 'antd';
+import {
+  SearchOutlined, UserOutlined, DownOutlined, RightOutlined,
+} from '@ant-design/icons';
+import {
+  getCandidatesGrouped, updateCandidatePositionStatus,
+} from '../api/candidate';
 import { getPositions } from '../api/position';
+import { getProjects } from '../api/project';
+
+const STATUS_MAP: Record<string, { label: string; color: string }> = {
+  pending_screen: { label: '待筛选', color: 'default' },
+  screen_rejected: { label: '筛选不通过', color: 'red' },
+  screen_passed: { label: '筛选通过待约面', color: 'blue' },
+  pending_interview: { label: '待面试', color: 'orange' },
+  interview_passed: { label: '面试通过', color: 'green' },
+  interview_rejected: { label: '面试不通过', color: 'volcano' },
+  abandoned: { label: '放弃面试', color: 'default' },
+};
+
+const STATUS_OPTIONS = Object.entries(STATUS_MAP).map(([value, { label }]) => ({
+  value,
+  label,
+}));
 
 export default function CandidateList() {
-  const navigate = useNavigate();
-  const [candidates, setCandidates] = useState<any[]>([]);
+  const [groups, setGroups] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
-  const [modalOpen, setModalOpen] = useState(false);
-  const [editItem, setEditItem] = useState<any>(null);
-  const [form] = Form.useForm();
+  const [filterProjectId, setFilterProjectId] = useState<number | undefined>();
+  const [filterPositionId, setFilterPositionId] = useState<number | undefined>();
+  const [filterStatus, setFilterStatus] = useState<string | undefined>();
+  const [projects, setProjects] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
-  const [matchModalOpen, setMatchModalOpen] = useState(false);
-  const [matchCandidateId, setMatchCandidateId] = useState<number | null>(null);
-  const [selectedPositionId, setSelectedPositionId] = useState<number | null>(null);
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    loadCandidates();
+    getProjects().then((res: any) => setProjects(res.data || res || []));
     getPositions().then((res: any) => setPositions(res.data || res || []));
   }, []);
 
-  const loadCandidates = async () => {
+  const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const res: any = await getCandidates();
-      setCandidates(res.data || res || []);
+      const res: any = await getCandidatesGrouped({
+        keyword: keyword || undefined,
+        projectId: filterProjectId,
+        positionId: filterPositionId,
+        status: filterStatus,
+      });
+      setGroups(res.data || res || []);
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [keyword, filterProjectId, filterPositionId, filterStatus]);
 
-  const handleCreate = () => {
-    setEditItem(null);
-    form.resetFields();
-    setModalOpen(true);
-  };
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
-  const handleEdit = (record: any) => {
-    setEditItem(record);
-    form.setFieldsValue(record);
-    setModalOpen(true);
-  };
-
-  const handleDelete = async (id: number) => {
+  const handleStatusChange = async (cpId: number, newStatus: string) => {
     try {
-      await deleteCandidate(id);
-      message.success('删除成功');
-      loadCandidates();
+      await updateCandidatePositionStatus(cpId, newStatus);
+      loadData();
     } catch (err: any) {
-      message.error(err.message || '删除失败');
+      console.error(err);
     }
   };
 
-  const handleSubmit = async () => {
-    try {
-      const values = await form.validateFields();
-      if (editItem) {
-        await updateCandidate(editItem.id, values);
-        message.success('更新成功');
+  const toggleExpand = (key: string) => {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
       } else {
-        await createCandidate(values);
-        message.success('创建成功');
+        next.add(key);
       }
-      setModalOpen(false);
-      loadCandidates();
-    } catch (err: any) {
-      if (err.errorFields) return;
-      message.error(err.message || '操作失败');
-    }
+      return next;
+    });
   };
 
-  const handleMatch = (candidateId: number) => {
-    setMatchCandidateId(candidateId);
-    setSelectedPositionId(null);
-    setMatchModalOpen(true);
-  };
-
-  const doMatch = async () => {
-    if (!matchCandidateId || !selectedPositionId) {
-      message.warning('请选择岗位');
-      return;
-    }
-    try {
-      await matchCandidate(matchCandidateId, selectedPositionId);
-      message.success('AI匹配分析完成');
-      setMatchModalOpen(false);
-    } catch (err: any) {
-      message.error(err.message || '匹配分析失败');
-    }
-  };
-
-  const filtered = candidates.filter(
-    (c) =>
-      !keyword ||
-      c.name.includes(keyword) ||
-      (c.phone && c.phone.includes(keyword)) ||
-      (c.currentCompany && c.currentCompany.includes(keyword)),
-  );
+  const filteredPositions = filterProjectId
+    ? positions.filter((p: any) => p.projectId === filterProjectId)
+    : positions;
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
+      {/* 筛选栏 */}
+      <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <Input
-          placeholder="搜索姓名/手机/公司"
+          placeholder="搜索姓名/电话/证件号"
           prefix={<SearchOutlined />}
           value={keyword}
           onChange={(e) => setKeyword(e.target.value)}
-          style={{ width: 300 }}
+          style={{ width: 220 }}
           allowClear
         />
-        <Button type="primary" icon={<PlusOutlined />} onClick={handleCreate}>
-          新建候选人
+        <Select
+          placeholder="筛选项目"
+          value={filterProjectId}
+          onChange={(v) => { setFilterProjectId(v); setFilterPositionId(undefined); }}
+          allowClear
+          style={{ width: 160 }}
+          options={projects.map((p: any) => ({ value: p.id, label: p.name }))}
+        />
+        <Select
+          placeholder="筛选岗位"
+          value={filterPositionId}
+          onChange={setFilterPositionId}
+          allowClear
+          style={{ width: 180 }}
+          options={filteredPositions.map((p: any) => ({ value: p.id, label: p.positionDuty }))}
+        />
+        <Select
+          placeholder="筛选状态"
+          value={filterStatus}
+          onChange={setFilterStatus}
+          allowClear
+          style={{ width: 160 }}
+          options={STATUS_OPTIONS}
+        />
+        <Button onClick={() => { setKeyword(''); setFilterProjectId(undefined); setFilterPositionId(undefined); setFilterStatus(undefined); }}>
+          重置筛选
         </Button>
       </div>
 
+      {/* 候选人分组列表 */}
       <Table
-        dataSource={filtered}
-        rowKey="id"
+        dataSource={groups}
+        rowKey={(r) => `${r.name}_${r.contactPhone || r.phone}`}
         loading={loading}
-        pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
+        pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 人` }}
+        scroll={{ x: 1600 }}
         columns={[
           {
-            title: '姓名',
-            dataIndex: 'name',
-            key: 'name',
-            render: (text: string, record: any) => (
-              <a onClick={() => navigate(`/candidates/${record.id}`)}>{text}</a>
-            ),
-          },
-          { title: '手机', dataIndex: 'phone', key: 'phone' },
-          {
-            title: '来源',
-            dataIndex: 'source',
-            key: 'source',
-            render: (v: string) => {
-              const map: Record<string, string> = { referral: '内推', website: '官网', headhunter: '猎头', social: '社交', other: '其他' };
-              return map[v] || v || '-';
+            title: '候选人',
+            key: 'candidate',
+            width: 180,
+            fixed: 'left' as const,
+            render: (_: any, record: any) => {
+              const key = `${record.name}_${record.contactPhone || record.phone}`;
+              const isExpanded = expandedKeys.has(key);
+              return (
+                <div
+                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
+                  onClick={() => toggleExpand(key)}
+                >
+                  {isExpanded ? <DownOutlined style={{ fontSize: 12 }} /> : <RightOutlined style={{ fontSize: 12 }} />}
+                  <UserOutlined style={{ color: '#1890ff' }} />
+                  <span style={{ fontWeight: 500 }}>{record.name}</span>
+                  <Badge count={record.positions.length} style={{ marginLeft: 4 }} />
+                </div>
+              );
             },
           },
-          { title: '工作年限', dataIndex: 'yearsOfExperience', key: 'yearsOfExperience', render: (v: number) => (v != null ? `${v}年` : '-') },
-          { title: '当前公司', dataIndex: 'currentCompany', key: 'currentCompany' },
+          { title: '性别', dataIndex: 'gender', width: 60, render: (v: string) => v || '-' },
+          { title: '证件类型', dataIndex: 'idType', width: 90, render: (v: string) => v || '-' },
+          { title: '证件号码', dataIndex: 'idNumber', width: 160, render: (v: string) => v || '-' },
+          { title: '联系电话', dataIndex: 'contactPhone', width: 120, render: (v: string) => v || '-' },
+          { title: '联系邮箱', dataIndex: 'contactEmail', width: 160, render: (v: string) => v || '-' },
+          { title: '供应商', dataIndex: 'supplier', width: 100, render: (v: string) => v || '-' },
+          { title: '学历类型', dataIndex: 'educationType', width: 80, render: (v: string) => v || '-' },
+          { title: '学历', dataIndex: 'education', width: 60, render: (v: string) => v || '-' },
+          { title: '领域年限', dataIndex: 'domainYears', width: 80, render: (v: number) => v ?? '-' },
+          { title: '工作状态', dataIndex: 'workStatus', width: 80, render: (v: string) => v || '-' },
+          { title: '期望薪资', dataIndex: 'expectedSalary', width: 100, render: (v: string) => v || '-' },
           {
-            title: '技能标签',
-            dataIndex: 'skills',
-            key: 'skills',
-            render: (v: string) =>
-              v
-                ? v.split(',').map((s: string, i: number) => (
-                    <Tag key={i} color="blue" style={{ marginBottom: 2 }}>
-                      {s.trim()}
-                    </Tag>
-                  ))
-                : '-',
+            title: '关联岗位数',
+            key: 'positionCount',
+            width: 90,
+            render: (_: any, record: any) => record.positions.length,
           },
-          { title: '关联岗位', dataIndex: 'positionCount', key: 'positionCount', render: (v: number) => v || 0 },
           {
-            title: '操作',
-            key: 'action',
-            render: (_: any, record: any) => (
-              <Space>
-                <a onClick={() => navigate(`/candidates/${record.id}`)}>查看</a>
-                <a onClick={() => handleEdit(record)}>编辑</a>
-                <a onClick={() => handleMatch(record.id)}>AI匹配</a>
-                <Popconfirm title="确定删除该候选人吗？" onConfirm={() => handleDelete(record.id)}>
-                  <a style={{ color: '#ff4d4f' }}>删除</a>
-                </Popconfirm>
-              </Space>
-            ),
+            title: '最新状态',
+            key: 'latestStatus',
+            width: 120,
+            render: (_: any, record: any) => {
+              const latest = record.positions[0];
+              if (!latest) return '-';
+              const s = STATUS_MAP[latest.status];
+              return s ? <Tag color={s.color}>{s.label}</Tag> : latest.status;
+            },
           },
         ]}
+        expandable={{
+          expandedRowKeys: [...expandedKeys],
+          onExpandedRowsChange: (keys) => {
+            setExpandedKeys(new Set(keys as string[]));
+          },
+          expandedRowRender: (record: any) => (
+            <Table
+              dataSource={record.positions}
+              rowKey="cpId"
+              size="small"
+              pagination={false}
+              scroll={{ x: 1400 }}
+              columns={[
+                {
+                  title: '项目',
+                  key: 'projectName',
+                  width: 120,
+                  render: (_: any, pos: any) => pos.projectName || '-',
+                },
+                {
+                  title: '需求编号',
+                  key: 'requirementNumber',
+                  width: 100,
+                  render: (_: any, pos: any) => pos.requirementNumber || '-',
+                },
+                {
+                  title: '岗位类型',
+                  key: 'positionType',
+                  width: 80,
+                  render: (_: any, pos: any) => pos.positionType || '-',
+                },
+                {
+                  title: '岗位职务',
+                  key: 'positionTitle',
+                  width: 120,
+                  render: (_: any, pos: any) => pos.positionTitle || '-',
+                },
+                {
+                  title: '技术领域',
+                  key: 'techDomain',
+                  width: 100,
+                  render: (_: any, pos: any) => pos.techDomain || '-',
+                },
+                {
+                  title: '对接实施',
+                  key: 'implementation',
+                  width: 100,
+                  render: (_: any, pos: any) => pos.implementation || '-',
+                },
+                {
+                  title: '推荐人',
+                  key: 'recommender',
+                  width: 80,
+                  render: (_: any, pos: any) => pos.recommender || '-',
+                },
+                {
+                  title: '推送日期',
+                  key: 'pushDate',
+                  width: 100,
+                  render: (_: any, pos: any) => pos.pushDate ? pos.pushDate.substring(0, 10) : '-',
+                },
+                {
+                  title: '状态',
+                  key: 'status',
+                  width: 160,
+                  render: (_: any, pos: any) => (
+                    <Select
+                      value={pos.status}
+                      onChange={(v) => handleStatusChange(pos.cpId, v)}
+                      style={{ width: 150 }}
+                      size="small"
+                      options={STATUS_OPTIONS}
+                    />
+                  ),
+                },
+              ]}
+            />
+          ),
+        }}
       />
-
-      <Modal
-        title={editItem ? '编辑候选人' : '新建候选人'}
-        open={modalOpen}
-        onOk={handleSubmit}
-        onCancel={() => setModalOpen(false)}
-        destroyOnClose
-        width={560}
-      >
-        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="name" label="姓名" rules={[{ required: true, message: '请输入姓名' }]}>
-            <Input placeholder="请输入姓名" />
-          </Form.Item>
-          <Form.Item name="phone" label="手机号">
-            <Input placeholder="请输入手机号" />
-          </Form.Item>
-          <Form.Item name="email" label="邮箱">
-            <Input placeholder="请输入邮箱" />
-          </Form.Item>
-          <Form.Item name="source" label="来源">
-            <Select placeholder="请选择来源" allowClear>
-              <Select.Option value="referral">内推</Select.Option>
-              <Select.Option value="website">官网投递</Select.Option>
-              <Select.Option value="headhunter">猎头</Select.Option>
-              <Select.Option value="social">社交媒体</Select.Option>
-              <Select.Option value="other">其他</Select.Option>
-            </Select>
-          </Form.Item>
-          <Form.Item name="yearsOfExperience" label="工作年限">
-            <InputNumber min={0} max={50} placeholder="工作年限" style={{ width: '100%' }} />
-          </Form.Item>
-          <Form.Item name="currentCompany" label="当前公司">
-            <Input placeholder="请输入当前公司" />
-          </Form.Item>
-          <Form.Item name="skills" label="技能标签">
-            <Input placeholder="多个技能用逗号分隔" />
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      <Modal
-        title="AI匹配分析"
-        open={matchModalOpen}
-        onOk={doMatch}
-        onCancel={() => setMatchModalOpen(false)}
-      >
-        <div style={{ marginTop: 16 }}>
-          <p>请选择要匹配的岗位：</p>
-          {positions.length === 0 ? (
-            <div style={{ color: '#999', textAlign: 'center', padding: 24 }}>暂无可选岗位</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {positions.map((p: any) => (
-                <div
-                  key={p.id}
-                  onClick={() => setSelectedPositionId(p.id)}
-                  style={{
-                    padding: '8px 12px',
-                    border: `1px solid ${selectedPositionId === p.id ? '#1890ff' : '#d9d9d9'}`,
-                    borderRadius: 6,
-                    cursor: 'pointer',
-                    background: selectedPositionId === p.id ? '#e6f7ff' : 'transparent',
-                  }}
-                >
-                  <span style={{ fontWeight: 500 }}>{p.title}</span>
-                  <span style={{ color: '#999', marginLeft: 12 }}>{p.projectName || ''}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </Modal>
     </div>
   );
 }

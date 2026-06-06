@@ -37,6 +37,130 @@ export class CandidateService {
     return qb.getMany();
   }
 
+  /**
+   * 查询所有候选人-岗位关联，支持按项目/岗位筛选
+   * 返回按人分组的数据（同名同电话归为一组）
+   */
+  async findAllWithPositions(query?: {
+    keyword?: string;
+    projectId?: number;
+    positionId?: number;
+    status?: string;
+  }) {
+    const qb = this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .innerJoinAndSelect('cp.candidate', 'candidate')
+      .innerJoinAndSelect('cp.position', 'position')
+      .leftJoinAndSelect('position.project', 'project');
+
+    if (query?.keyword) {
+      qb.andWhere(
+        '(candidate.name LIKE :keyword OR candidate.contactPhone LIKE :keyword OR candidate.idNumber LIKE :keyword)',
+        { keyword: `%${query.keyword}%` },
+      );
+    }
+    if (query?.projectId) {
+      qb.andWhere('position.projectId = :projectId', {
+        projectId: query.projectId,
+      });
+    }
+    if (query?.positionId) {
+      qb.andWhere('cp.positionId = :positionId', {
+        positionId: query.positionId,
+      });
+    }
+    if (query?.status) {
+      qb.andWhere('cp.status = :status', { status: query.status });
+    }
+
+    qb.orderBy('candidate.name', 'ASC').addOrderBy('cp.recommendedAt', 'DESC');
+
+    const results = await qb.getMany();
+
+    // 按同名同电话分组
+    const groupMap = new Map<string, any[]>();
+    for (const cp of results) {
+      const key = `${cp.candidate.name}||${cp.candidate.contactPhone || ''}`;
+      if (!groupMap.has(key)) {
+        groupMap.set(key, []);
+      }
+      groupMap.get(key)!.push(cp);
+    }
+
+    // 转换为分组结构
+    const groups = Array.from(groupMap.entries()).map(([key, items]) => {
+      const [name, phone] = key.split('||');
+      const firstCandidate = items[0]?.candidate;
+      const candidateIds = [...new Set(items.map((i) => i.candidateId))];
+      return {
+        name,
+        phone: phone || undefined,
+        candidateIds,
+        // 候选人基本信息
+        idType: firstCandidate?.idType,
+        idNumber: firstCandidate?.idNumber,
+        gender: firstCandidate?.gender,
+        contactPhone: firstCandidate?.contactPhone,
+        contactEmail: firstCandidate?.contactEmail,
+        areaCode: firstCandidate?.areaCode,
+        educationType: firstCandidate?.educationType,
+        education: firstCandidate?.education,
+        graduationDate: firstCandidate?.graduationDate,
+        domainYears: firstCandidate?.domainYears,
+        workStatus: firstCandidate?.workStatus,
+        expectedSalary: firstCandidate?.expectedSalary,
+        supplier: firstCandidate?.supplier,
+        resumeUrl: firstCandidate?.resumeUrl,
+        positions: items.map((cp) => ({
+          cpId: cp.id,
+          candidateId: cp.candidateId,
+          positionId: cp.positionId,
+          positionTitle: cp.position?.positionDuty,
+          positionType: cp.position?.positionType,
+          techDomain: cp.position?.techDomain,
+          requirementNumber: cp.position?.requirementNumber,
+          projectId: cp.position?.projectId,
+          projectName: (cp.position as any)?.project?.name,
+          status: cp.status,
+          matchScore: cp.matchScore,
+          recommendReason: cp.recommendReason,
+          recommender: cp.recommender,
+          pushDate: cp.pushDate,
+          implementation: cp.implementation,
+          recommendedAt: cp.recommendedAt,
+          updatedAt: cp.updatedAt,
+        })),
+      };
+    });
+
+    return groups;
+  }
+
+  /**
+   * 更新候选人在某岗位的状态
+   */
+  async updateCandidatePositionStatus(
+    cpId: number,
+    status: string,
+    userId: number,
+  ) {
+    const cp = await this.candidatePositionRepository.findOne({
+      where: { id: cpId },
+      relations: ['candidate', 'position'],
+    });
+    if (!cp) {
+      throw new NotFoundException('候选人岗位关联不存在');
+    }
+    cp.status = status as any;
+    const result = await this.candidatePositionRepository.save(cp);
+    await this.logService.log(userId, 'update_status', 'candidate_position', cpId, {
+      candidateName: cp.candidate?.name,
+      positionTitle: cp.position?.positionDuty,
+      newStatus: status,
+    });
+    return result;
+  }
+
   async findOne(id: number) {
     const candidate = await this.candidateRepository.findOne({
       where: { id },
@@ -119,7 +243,7 @@ export class CandidateService {
         positionId,
         matchScore: matchResult.score,
         matchDetail: JSON.stringify(matchResult.detail),
-        status: 'recommended',
+        status: 'pending_screen',
         recommendedAt: new Date(),
       });
       await this.candidatePositionRepository.save(cp);

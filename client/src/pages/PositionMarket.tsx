@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Row, Col, Input, Select, Button, Tag, Space, Spin, Empty, Modal, Form, InputNumber, message } from 'antd';
-import { SearchOutlined, PlusOutlined, EnvironmentOutlined, DollarOutlined, TeamOutlined, ClockCircleOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Input, Select, Button, Tag, Space, Spin, Empty, Modal, Form, message } from 'antd';
+import { SearchOutlined, PlusOutlined, DollarOutlined, TeamOutlined, ClockCircleOutlined, EnvironmentOutlined } from '@ant-design/icons';
 import { getPositions, createPosition } from '../api/position';
 import { getProjects } from '../api/project';
+import { useUserStore } from '../stores/user';
 import StatusTag from '../components/StatusTag';
 
 const urgencyColorMap: Record<string, string> = {
@@ -21,6 +22,7 @@ const urgencyLabelMap: Record<string, string> = {
 
 export default function PositionMarket() {
   const navigate = useNavigate();
+  const user = useUserStore((s) => s.user);
   const [positions, setPositions] = useState<any[]>([]);
   const [projects, setProjects] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,7 +81,7 @@ export default function PositionMarket() {
   };
 
   const filtered = positions.filter((p) => {
-    if (keyword && !p.title.includes(keyword) && !(p.projectName || '').includes(keyword)) return false;
+    if (keyword && !(p.positionDuty || '').includes(keyword) && !(p.requirementNumber || '').includes(keyword) && !(p.project?.name || '').includes(keyword)) return false;
     if (filterProject && p.projectId !== filterProject) return false;
     if (filterUrgency && p.urgency !== filterUrgency) return false;
     if (filterStatus && p.status !== filterStatus) return false;
@@ -91,12 +93,12 @@ export default function PositionMarket() {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <Space wrap>
           <Input
-            placeholder="搜索岗位/项目关键词"
+            placeholder="搜索岗位职务/需求编号/项目"
             prefix={<SearchOutlined />}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             onPressEnter={handleSearch}
-            style={{ width: 240 }}
+            style={{ width: 260 }}
             allowClear
           />
           <Select
@@ -130,7 +132,7 @@ export default function PositionMarket() {
             style={{ width: 120 }}
           >
             <Select.Option value="open">招聘中</Select.Option>
-            <Select.Option value="paused">已暂停</Select.Option>
+            <Select.Option value="partial">部分到岗</Select.Option>
             <Select.Option value="filled">已满员</Select.Option>
             <Select.Option value="closed">已关闭</Select.Option>
           </Select>
@@ -138,7 +140,7 @@ export default function PositionMarket() {
             搜索
           </Button>
         </Space>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); setCreateModalOpen(true); }}>
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => { form.resetFields(); form.setFieldsValue({ positionImplementation: user?.name || user?.username || '' }); setCreateModalOpen(true); }}>
           发布岗位需求
         </Button>
       </div>
@@ -157,38 +159,46 @@ export default function PositionMarket() {
                   styles={{ body: { padding: 20 } }}
                 >
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                    <h3 style={{ margin: 0, fontSize: 16, flex: 1, marginRight: 8 }}>{pos.title}</h3>
+                    <h3 style={{ margin: 0, fontSize: 16, flex: 1, marginRight: 8 }}>{pos.positionDuty}</h3>
                     <Tag color={urgencyColorMap[pos.urgency] || 'default'}>
                       {urgencyLabelMap[pos.urgency] || pos.urgency}
                     </Tag>
                   </div>
-                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 8 }}>
-                    {pos.projectName || '未知项目'}
+                  <div style={{ color: '#8c8c8c', fontSize: 13, marginBottom: 6 }}>
+                    {pos.project?.name || '未知项目'} · {pos.department}
                   </div>
-                  {(pos.salaryMin || pos.salaryMax) && (
-                    <div style={{ marginBottom: 8, color: '#fa8c16', fontWeight: 500 }}>
+                  <div style={{ color: '#8c8c8c', fontSize: 12, marginBottom: 6 }}>
+                    {pos.systemName} · {pos.requirementNumber}
+                  </div>
+                  {pos.salaryRange && (
+                    <div style={{ marginBottom: 6, color: '#fa8c16', fontWeight: 500 }}>
                       <DollarOutlined style={{ marginRight: 4 }} />
-                      {pos.salaryMin || '?'}K - {pos.salaryMax || '?'}K
+                      {pos.salaryRange}
                     </div>
                   )}
-                  {pos.location && (
-                    <div style={{ marginBottom: 8, fontSize: 13, color: '#595959' }}>
-                      <EnvironmentOutlined style={{ marginRight: 4 }} />
-                      {pos.location}
-                    </div>
-                  )}
-                  <div style={{ marginBottom: 8, fontSize: 13, color: '#595959' }}>
+                  <div style={{ marginBottom: 6, fontSize: 13, color: '#595959' }}>
+                    <EnvironmentOutlined style={{ marginRight: 4 }} />
+                    {pos.region} · {pos.deliveryForm}
+                  </div>
+                  <div style={{ marginBottom: 6, fontSize: 13, color: '#595959' }}>
                     <TeamOutlined style={{ marginRight: 4 }} />
-                    需求 {pos.headcount || 0} 人 / 已录用 {pos.hiredCount || 0} 人
+                    需求 {pos.requiredCount || 0} 人 / 已推荐 {pos.recommendedCount || 0} 人 / 已录用 {pos.hiredCount || 0} 人
+                    {pos.gapCount > 0 && (
+                      <Tag color="volcano" style={{ marginLeft: 6, fontSize: 11 }}>还差 {pos.gapCount} 人</Tag>
+                    )}
+                    {pos.gapCount === 0 && pos.requiredCount > 0 && (
+                      <Tag color="green" style={{ marginLeft: 6, fontSize: 11 }}>已满员</Tag>
+                    )}
                   </div>
                   {pos.expectedDate && (
-                    <div style={{ marginBottom: 8, fontSize: 13, color: '#595959' }}>
+                    <div style={{ marginBottom: 6, fontSize: 13, color: '#595959' }}>
                       <ClockCircleOutlined style={{ marginRight: 4 }} />
                       期望到岗: {pos.expectedDate.substring(0, 10)}
                     </div>
                   )}
-                  <div style={{ marginTop: 8 }}>
-                    <StatusTag status={pos.status} type="position" />
+                  <div style={{ marginTop: 8, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    <Tag>{pos.positionType}</Tag>
+                    <Tag color="blue">{pos.techDomain}</Tag>
                   </div>
                 </Card>
               </Col>
@@ -203,51 +213,116 @@ export default function PositionMarket() {
         onOk={handleCreate}
         onCancel={() => setCreateModalOpen(false)}
         destroyOnClose
-        width={640}
+        width={720}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
-          <Form.Item name="title" label="岗位名称" rules={[{ required: true, message: '请输入岗位名称' }]}>
-            <Input placeholder="请输入岗位名称" />
-          </Form.Item>
-          <Form.Item name="projectId" label="所属项目" rules={[{ required: true, message: '请选择所属项目' }]}>
-            <Select placeholder="请选择所属项目">
-              {projects.map((p) => (
-                <Select.Option key={p.id} value={p.id}>{p.name}</Select.Option>
-              ))}
-            </Select>
-          </Form.Item>
-          <Form.Item name="description" label="岗位描述">
-            <Input.TextArea rows={3} placeholder="请输入岗位描述" />
-          </Form.Item>
-          <Form.Item name="requirements" label="岗位要求">
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="systemName" label="系统" rules={[{ required: true, message: '请输入系统' }]}>
+                <Input placeholder="请输入系统" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="department" label="部门" rules={[{ required: true, message: '请输入部门' }]}>
+                <Input placeholder="请输入部门" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="requirementNumber" label="需求编号" rules={[{ required: true, message: '请输入需求编号' }]}>
+                <Input placeholder="请输入需求编号" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="projectId" label="所属项目" rules={[{ required: true, message: '请选择所属项目' }]}>
+                <Select placeholder="请选择所属项目">
+                  {projects.map((p) => (
+                    <Select.Option key={p.id} value={p.id}>{p.name}</Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="positionType" label="岗位类型" rules={[{ required: true, message: '请输入岗位类型' }]}>
+                <Input placeholder="请输入岗位类型" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="positionDuty" label="岗位职务" rules={[{ required: true, message: '请输入岗位职务' }]}>
+                <Input placeholder="请输入岗位职务" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="techDomain" label="技术领域" rules={[{ required: true, message: '请输入技术领域' }]}>
+                <Input placeholder="请输入技术领域，如：Java、前端、AI" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="majorType" label="专业类型" rules={[{ required: true, message: '请输入专业类型' }]}>
+                <Input placeholder="请输入专业类型" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="levelDistribution" label="职级分布" rules={[{ required: true, message: '请输入职级分布' }]}>
+                <Input placeholder="请输入职级分布，如：P6-P7" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="salaryRange" label="薪资范围">
+                <Input placeholder="请输入薪资范围，如：15K-25K" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="requirements" label="岗位要求" rules={[{ required: true, message: '请输入岗位要求' }]}>
             <Input.TextArea rows={3} placeholder="请输入岗位要求" />
           </Form.Item>
-          <Space style={{ width: '100%' }} size={16}>
-            <Form.Item name="salaryMin" label="最低薪资(K)" style={{ width: 180 }}>
-              <InputNumber min={0} placeholder="最低薪资" style={{ width: '100%' }} />
-            </Form.Item>
-            <Form.Item name="salaryMax" label="最高薪资(K)" style={{ width: 180 }}>
-              <InputNumber min={0} placeholder="最高薪资" style={{ width: '100%' }} />
-            </Form.Item>
-          </Space>
-          <Form.Item name="location" label="工作地点">
-            <Input placeholder="请输入工作地点" />
+          <Form.Item name="responsibilities" label="岗位职责" rules={[{ required: true, message: '请输入岗位职责' }]}>
+            <Input.TextArea rows={3} placeholder="请输入岗位职责" />
           </Form.Item>
-          <Space style={{ width: '100%' }} size={16}>
-            <Form.Item name="urgency" label="紧急程度" initialValue="medium" style={{ width: 180 }}>
-              <Select>
-                <Select.Option value="low">低</Select.Option>
-                <Select.Option value="medium">中</Select.Option>
-                <Select.Option value="high">高</Select.Option>
-                <Select.Option value="critical">紧急</Select.Option>
-              </Select>
-            </Form.Item>
-            <Form.Item name="headcount" label="需求人数" initialValue={1} style={{ width: 180 }}>
-              <InputNumber min={1} max={100} style={{ width: '100%' }} />
-            </Form.Item>
-          </Space>
+          <Form.Item name="domainExperience" label="领域经验" rules={[{ required: true, message: '请输入领域经验' }]}>
+            <Input.TextArea rows={2} placeholder="请输入领域经验要求" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="region" label="地区" rules={[{ required: true, message: '请输入地区' }]}>
+                <Input placeholder="请输入地区，如：北京、上海" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="deliveryForm" label="交付形式" rules={[{ required: true, message: '请输入交付形式' }]}>
+                <Input placeholder="请输入交付形式" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="urgency" label="紧急程度" initialValue="medium">
+                <Select>
+                  <Select.Option value="low">低</Select.Option>
+                  <Select.Option value="medium">中</Select.Option>
+                  <Select.Option value="high">高</Select.Option>
+                  <Select.Option value="critical">紧急</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="headcount" label="需求人数" initialValue={1}>
+                <Input placeholder="请输入需求人数" type="number" min={1} />
+              </Form.Item>
+            </Col>
+          </Row>
           <Form.Item name="expectedDate" label="期望到岗日期">
             <Input type="date" />
+          </Form.Item>
+          <Form.Item name="positionImplementation" label="岗位实施">
+            <Input placeholder="自动识别" readOnly />
           </Form.Item>
         </Form>
       </Modal>

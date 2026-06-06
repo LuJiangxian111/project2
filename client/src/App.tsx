@@ -9,7 +9,6 @@ import PositionMarket from './pages/PositionMarket';
 import PositionDetail from './pages/PositionDetail';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
-import InterviewList from './pages/InterviewList';
 import AIAssistant from './pages/AIAssistant';
 import Settings from './pages/Settings';
 
@@ -38,7 +37,6 @@ export default function App() {
         <Route path="positions/:id" element={<PositionDetail />} />
         <Route path="candidates" element={<CandidateList />} />
         <Route path="candidates/:id" element={<CandidateDetail />} />
-        <Route path="interviews" element={<InterviewList />} />
         <Route path="ai" element={<AIAssistant />} />
         <Route path="settings" element={<Settings />} />
       </Route>

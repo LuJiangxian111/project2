@@ -11,13 +11,17 @@ import {
   ParseIntPipe,
 } from '@nestjs/common';
 import { PositionService } from './position.service';
+import { CandidateService } from '../candidate/candidate.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @Controller('positions')
 @UseGuards(JwtAuthGuard)
 export class PositionController {
-  constructor(private positionService: PositionService) {}
+  constructor(
+    private positionService: PositionService,
+    private candidateService: CandidateService,
+  ) {}
 
   @Get()
   async findAll(
@@ -76,5 +80,18 @@ export class PositionController {
   @Get(':id/candidates')
   async getCandidates(@Param('id', ParseIntPipe) id: number) {
     return this.positionService.getCandidates(id);
+  }
+
+  @Put('candidate-position/:cpId/status')
+  async updateCandidatePositionStatus(
+    @Param('cpId', ParseIntPipe) cpId: number,
+    @Body() body: { status: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.candidateService.updateCandidatePositionStatus(
+      cpId,
+      body.status,
+      user.id,
+    );
   }
 }

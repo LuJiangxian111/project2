@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Position } from '../../entities/position.entity';
@@ -41,13 +41,49 @@ export class PositionService {
       });
     }
     if (query?.keyword) {
-      qb.andWhere('position.title LIKE :keyword', {
-        keyword: `%${query.keyword}%`,
-      });
+      qb.andWhere(
+        '(position.positionDuty LIKE :keyword OR position.requirementNumber LIKE :keyword OR project.name LIKE :keyword)',
+        { keyword: `%${query.keyword}%` },
+      );
     }
 
     qb.orderBy('position.createdAt', 'DESC');
-    return qb.getMany();
+    const positions = await qb.getMany();
+
+    // 为每个岗位附加候选人统计
+    const positionIds = positions.map((p) => p.id);
+    if (positionIds.length > 0) {
+      const stats = await this.candidatePositionRepository
+        .createQueryBuilder('cp')
+        .select('cp.positionId', 'positionId')
+        .addSelect('COUNT(*)', 'recommendedCount')
+        .addSelect(
+          "SUM(CASE WHEN cp.status = 'interview_passed' THEN 1 ELSE 0 END)",
+          'hiredCount',
+        )
+        .where('cp.positionId IN (:...ids)', { ids: positionIds })
+        .groupBy('cp.positionId')
+        .getRawMany();
+
+      const statsMap = new Map(
+        stats.map((s) => [Number(s.positionId), s]),
+      );
+
+      for (const pos of positions) {
+        const s = statsMap.get(pos.id);
+        (pos as any).recommendedCount = s
+          ? Number(s.recommendedCount)
+          : 0;
+        // hiredCount 从 candidatePosition 统计覆盖实体默认值
+        pos.hiredCount = s ? Number(s.hiredCount) : 0;
+        (pos as any).gapCount = Math.max(
+          0,
+          pos.requiredCount - pos.hiredCount,
+        );
+      }
+    }
+
+    return positions;
   }
 
   async findOne(id: number) {
@@ -61,12 +97,18 @@ export class PositionService {
     return position;
   }
 
-  async create(data: Partial<Position>, userId: number) {
-    const position = this.positionRepository.create(data);
+  async create(data: any, userId: number) {
+    const mapped: any = { ...data };
+    // 前端 headcount → 后端 requiredCount
+    if (mapped.headcount !== undefined) {
+      mapped.requiredCount = mapped.headcount;
+      delete mapped.headcount;
+    }
+    const position = this.positionRepository.create(mapped) as unknown as Position;
     position.creatorId = userId;
-    const result = await this.positionRepository.save(position);
+    const result: any = await this.positionRepository.save(position);
     await this.logService.log(userId, 'create', 'position', result.id, {
-      title: result.title,
+      positionDuty: result.positionDuty,
     });
     return result;
   }
@@ -89,14 +131,14 @@ export class PositionService {
     }
     await this.positionRepository.remove(position);
     await this.logService.log(userId, 'delete', 'position', id, {
-      title: position.title,
+      positionDuty: position.positionDuty,
     });
     return { message: '删除成功' };
   }
 
   async addCandidate(
     positionId: number,
-    candidateData: Partial<Candidate>,
+    candidateData: any,
     userId: number,
   ) {
     const position = await this.positionRepository.findOne({
@@ -107,30 +149,47 @@ export class PositionService {
     }
 
     let candidate: Candidate;
-    if (candidateData.id) {
+    const existingId = candidateData.candidateId || candidateData.id;
+    if (existingId) {
       candidate = await this.candidateRepository.findOne({
-        where: { id: candidateData.id },
+        where: { id: existingId },
       });
       if (!candidate) {
         throw new NotFoundException('候选人不存在');
       }
     } else {
-      candidate = this.candidateRepository.create(candidateData);
+      candidate = this.candidateRepository.create(candidateData) as unknown as Candidate;
       candidate = await this.candidateRepository.save(candidate);
     }
 
-    const existing = await this.candidatePositionRepository.findOne({
-      where: { candidateId: candidate.id, positionId },
-    });
-    if (existing) {
-      return existing;
+    // 检查同一岗位是否已推荐同名同电话的候选人
+    const existingCP = await this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .innerJoinAndSelect('cp.candidate', 'candidate')
+      .where('cp.positionId = :positionId', { positionId })
+      .andWhere('candidate.name = :name', { name: candidate.name })
+      .getOne();
+    if (existingCP) {
+      const phoneInfo = candidate.contactPhone ? `（电话: ${candidate.contactPhone}）` : '';
+      throw new ConflictException(
+        `候选人"${candidate.name}"${phoneInfo}已推荐到该岗位，不可重复推荐`,
+      );
     }
+
+    // 获取岗位的对接实施信息
+    const positionWithImpl = await this.positionRepository.findOne({
+      where: { id: positionId },
+    });
 
     const cp = this.candidatePositionRepository.create({
       candidateId: candidate.id,
       positionId,
-      status: 'recommended',
+      status: 'pending_screen',
       recommendedAt: new Date(),
+      pushDate: new Date(),
+      recommender: candidateData.recommender || '',
+      recommendReason: candidateData.recommendReason || '',
+      implementation: positionWithImpl?.positionImplementation || '',
     });
     const result = await this.candidatePositionRepository.save(cp);
     await this.logService.log(userId, 'add_candidate', 'position', positionId, {

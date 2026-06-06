@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Menu, Dropdown, Avatar, Breadcrumb, theme } from 'antd';
 import {
@@ -6,7 +6,6 @@ import {
   ProjectOutlined,
   ShopOutlined,
   TeamOutlined,
-  CalendarOutlined,
   RobotOutlined,
   SettingOutlined,
   UserOutlined,
@@ -23,7 +22,6 @@ const menuItems = [
   { key: '/projects', icon: <ProjectOutlined />, label: '项目管理' },
   { key: '/market', icon: <ShopOutlined />, label: '需求广场' },
   { key: '/candidates', icon: <TeamOutlined />, label: '候选人管理' },
-  { key: '/interviews', icon: <CalendarOutlined />, label: '面试管理' },
   { key: '/ai', icon: <RobotOutlined />, label: 'AI助手' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
 ];
@@ -33,7 +31,6 @@ const breadcrumbMap: Record<string, string> = {
   '/projects': '项目管理',
   '/market': '需求广场',
   '/candidates': '候选人管理',
-  '/interviews': '面试管理',
   '/ai': 'AI助手',
   '/settings': '系统设置',
 };
@@ -42,8 +39,20 @@ export default function MainLayout() {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { user, logout } = useUserStore();
+  const { user, logout, setUser, token } = useUserStore();
   const { token: themeToken } = theme.useToken();
+
+  // 页面刷新时恢复用户信息
+  useEffect(() => {
+    if (token && !user) {
+      import('../api/auth').then(({ getProfile }) => {
+        getProfile().then((res: any) => {
+          const u = res.data || res;
+          setUser(u);
+        }).catch(() => {});
+      });
+    }
+  }, [token, user, setUser]);
 
   const pathSnippets = location.pathname.split('/').filter((i) => i);
   const breadcrumbItems = [

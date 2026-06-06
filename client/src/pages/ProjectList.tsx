@@ -110,7 +110,7 @@ export default function ProjectList() {
             key: 'status',
             render: (v: string) => <StatusTag status={v} type="project" />,
           },
-          { title: '负责人', dataIndex: 'manager', key: 'manager' },
+          { title: '负责人', dataIndex: 'manager', key: 'manager', render: (v: any) => v?.name || '-' },
           {
             title: '开始日期',
             dataIndex: 'startDate',
@@ -161,9 +161,6 @@ export default function ProjectList() {
               <Select.Option value="paused">已暂停</Select.Option>
               <Select.Option value="completed">已完成</Select.Option>
             </Select>
-          </Form.Item>
-          <Form.Item name="manager" label="负责人">
-            <Input placeholder="请输入负责人" />
           </Form.Item>
           <Form.Item name="startDate" label="开始日期">
             <Input type="date" />

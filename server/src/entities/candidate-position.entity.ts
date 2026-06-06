@@ -2,7 +2,6 @@ import {
   Entity,
   PrimaryGeneratedColumn,
   Column,
-  CreateDateColumn,
   UpdateDateColumn,
   ManyToOne,
   OneToMany,
@@ -40,24 +39,36 @@ export class CandidatePosition {
   @Column({
     type: 'simple-enum',
     enum: [
-      'recommended',
-      'screening',
-      'interviewing',
-      'offered',
-      'hired',
-      'rejected',
-      'withdrawn',
+      'pending_screen',
+      'screen_rejected',
+      'screen_passed',
+      'pending_interview',
+      'interview_passed',
+      'interview_rejected',
+      'abandoned',
     ],
-    default: 'recommended',
+    default: 'pending_screen',
   })
   status:
-    | 'recommended'
-    | 'screening'
-    | 'interviewing'
-    | 'offered'
-    | 'hired'
-    | 'rejected'
-    | 'withdrawn';
+    | 'pending_screen'
+    | 'screen_rejected'
+    | 'screen_passed'
+    | 'pending_interview'
+    | 'interview_passed'
+    | 'interview_rejected'
+    | 'abandoned';
+
+  @Column({ name: 'recommend_reason', type: 'text', nullable: true })
+  recommendReason: string;
+
+  @Column({ name: 'recommender', length: 100, nullable: true })
+  recommender: string;
+
+  @Column({ name: 'push_date', type: 'date', nullable: true })
+  pushDate: Date;
+
+  @Column({ name: 'implementation', length: 200, nullable: true })
+  implementation: string;
 
   @Column({ name: 'recommended_at', type: 'datetime' })
   recommendedAt: Date;

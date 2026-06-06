@@ -27,6 +27,21 @@ export class CandidateController {
     return this.candidateService.findAll({ keyword, source });
   }
 
+  @Get('grouped')
+  async findAllGrouped(
+    @Query('keyword') keyword?: string,
+    @Query('projectId') projectId?: string,
+    @Query('positionId') positionId?: string,
+    @Query('status') status?: string,
+  ) {
+    return this.candidateService.findAllWithPositions({
+      keyword,
+      projectId: projectId ? Number(projectId) : undefined,
+      positionId: positionId ? Number(positionId) : undefined,
+      status,
+    });
+  }
+
   @Post()
   async create(
     @Body() body: Partial<any>,

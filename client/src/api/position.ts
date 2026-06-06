@@ -2,17 +2,28 @@ import request from './request';
 
 export interface Position {
   id: number;
-  title: string;
+  systemName: string;
+  department: string;
+  requirementNumber: string;
+  positionType: string;
+  positionDuty: string;
+  techDomain: string;
+  majorType: string;
+  levelDistribution: string;
+  salaryRange?: string;
+  requirements: string;
+  responsibilities: string;
+  domainExperience: string;
+  region: string;
+  deliveryForm: string;
+  positionImplementation?: string;
   projectId: number;
   projectName?: string;
-  description?: string;
-  requirements?: string;
-  salaryMin?: number;
-  salaryMax?: number;
-  location?: string;
   urgency: string;
-  headcount: number;
+  requiredCount: number;
   hiredCount: number;
+  recommendedCount?: number;
+  gapCount?: number;
   expectedDate?: string;
   status: string;
   createdAt?: string;
@@ -20,13 +31,22 @@ export interface Position {
 }
 
 export interface CreatePositionParams {
-  title: string;
+  systemName: string;
+  department: string;
+  requirementNumber: string;
+  positionType: string;
+  positionDuty: string;
+  techDomain: string;
+  majorType: string;
+  levelDistribution: string;
+  salaryRange?: string;
+  requirements: string;
+  responsibilities: string;
+  domainExperience: string;
+  region: string;
+  deliveryForm: string;
+  positionImplementation?: string;
   projectId: number;
-  description?: string;
-  requirements?: string;
-  salaryMin?: number;
-  salaryMax?: number;
-  location?: string;
   urgency?: string;
   headcount?: number;
   expectedDate?: string;

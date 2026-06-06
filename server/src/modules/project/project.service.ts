@@ -51,7 +51,10 @@ export class ProjectService {
   }
 
   async create(data: Partial<Project>, userId: number) {
-    const project = this.projectRepository.create(data);
+    const project = this.projectRepository.create({
+      ...data,
+      managerId: data.managerId || userId,
+    });
     const result = await this.projectRepository.save(project);
     await this.logService.log(userId, 'create', 'project', result.id, {
       name: result.name,
