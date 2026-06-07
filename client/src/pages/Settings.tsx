@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Form, Input, Button, Divider, message, Spin, Descriptions } from 'antd';
+import { Card, Form, Input, Button, message, Spin } from 'antd';
 import { useUserStore } from '../stores/user';
 import { getProfile } from '../api/auth';
 import request from '../api/request';
@@ -7,7 +7,6 @@ import request from '../api/request';
 export default function Settings() {
   const { user, setUser } = useUserStore();
   const [loading, setLoading] = useState(false);
-  const [profileForm] = Form.useForm();
   const [aiForm] = Form.useForm();
   const [testing, setTesting] = useState(false);
 
@@ -21,11 +20,6 @@ export default function Settings() {
       const res: any = await getProfile();
       const profile = res.data || res;
       setUser(profile);
-      profileForm.setFieldsValue({
-        username: profile.username,
-        name: profile.name,
-        email: profile.email,
-      });
       aiForm.setFieldsValue({
         llmApiKey: profile.llmApiKey,
         llmBaseUrl: profile.llmBaseUrl,
@@ -35,19 +29,6 @@ export default function Settings() {
       console.error(err);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleProfileSave = async () => {
-    try {
-      const values = await profileForm.validateFields();
-      if (!user?.id) return;
-      await request.put(`/users/${user.id}`, values);
-      message.success('个人信息更新成功');
-      loadProfile();
-    } catch (err: any) {
-      if (err.errorFields) return;
-      message.error(err.message || '更新失败');
     }
   };
 
@@ -81,25 +62,6 @@ export default function Settings() {
 
   return (
     <Spin spinning={loading}>
-      <Card title="基本信息" style={{ borderRadius: 8, marginBottom: 16 }}>
-        <Form form={profileForm} layout="vertical" style={{ maxWidth: 480 }}>
-          <Form.Item name="username" label="用户名">
-            <Input disabled />
-          </Form.Item>
-          <Form.Item name="name" label="姓名">
-            <Input placeholder="请输入姓名" />
-          </Form.Item>
-          <Form.Item name="email" label="邮箱">
-            <Input placeholder="请输入邮箱" />
-          </Form.Item>
-          <Form.Item>
-            <Button type="primary" onClick={handleProfileSave}>
-              保存信息
-            </Button>
-          </Form.Item>
-        </Form>
-      </Card>
-
       <Card title="AI配置" style={{ borderRadius: 8 }}>
         <Form form={aiForm} layout="vertical" style={{ maxWidth: 480 }}>
           <Form.Item

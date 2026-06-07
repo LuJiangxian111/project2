@@ -24,6 +24,18 @@ export class User {
   @Column()
   name: string;
 
+  @Column({ nullable: true })
+  nickname: string;
+
+  @Column({ nullable: true })
+  gender: string;
+
+  @Column({ nullable: true })
+  phone: string;
+
+  @Column({ nullable: true })
+  email: string;
+
   @Column({ type: 'simple-enum', enum: ['admin', 'hr', 'pm', 'interviewer'], default: 'hr' })
   role: 'admin' | 'hr' | 'pm' | 'interviewer';
 

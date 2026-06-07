@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
@@ -70,5 +70,19 @@ export class UserService {
     await this.userRepository.save(user);
     const { password, ...result } = user;
     return result;
+  }
+
+  async changePassword(id: number, oldPassword: string, newPassword: string) {
+    const user = await this.userRepository.findOne({ where: { id } });
+    if (!user) {
+      throw new NotFoundException('用户不存在');
+    }
+    const isPasswordValid = await bcrypt.compare(oldPassword, user.password);
+    if (!isPasswordValid) {
+      throw new BadRequestException('原密码错误');
+    }
+    user.password = await bcrypt.hash(newPassword, 10);
+    await this.userRepository.save(user);
+    return { success: true };
   }
 }

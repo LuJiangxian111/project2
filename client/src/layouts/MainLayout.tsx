@@ -33,6 +33,7 @@ const breadcrumbMap: Record<string, string> = {
   '/candidates': '候选人管理',
   '/ai': 'AI助手',
   '/settings': '系统设置',
+  '/profile': '个人信息',
 };
 
 export default function MainLayout() {
@@ -79,6 +80,8 @@ export default function MainLayout() {
     if (info.key === 'logout') {
       logout();
       navigate('/login');
+    } else if (info.key === 'profile') {
+      navigate('/profile');
     } else if (info.key === 'settings') {
       navigate('/settings');
     }
@@ -166,8 +169,12 @@ export default function MainLayout() {
           </div>
           <Dropdown menu={{ items: dropdownItems, onClick: handleDropdownClick }} placement="bottomRight">
             <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Avatar icon={<UserOutlined />} style={{ backgroundColor: themeToken.colorPrimary }} />
-              <span>{user?.name || user?.username || '用户'}</span>
+              <Avatar
+                icon={<UserOutlined />}
+                src={user?.avatar ? (user.avatar.startsWith('http') ? user.avatar : `http://localhost:3000${user.avatar}`) : undefined}
+                style={{ backgroundColor: themeToken.colorPrimary }}
+              />
+              <span>{user?.nickname || user?.name || user?.username || '用户'}</span>
             </div>
           </Dropdown>
         </Header>

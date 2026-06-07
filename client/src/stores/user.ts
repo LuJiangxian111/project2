@@ -5,7 +5,11 @@ interface User {
   id: number;
   username: string;
   name?: string;
+  nickname?: string;
+  gender?: string;
+  phone?: string;
   email?: string;
+  avatar?: string;
   role?: string;
   llmApiKey?: string;
   llmBaseUrl?: string;

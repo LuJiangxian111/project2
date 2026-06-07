@@ -12,6 +12,7 @@ import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import AIAssistant from './pages/AIAssistant';
 import Settings from './pages/Settings';
+import Profile from './pages/Profile';
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
   const token = useUserStore((s) => s.token);
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="candidates/:id" element={<CandidateDetail />} />
         <Route path="ai" element={<AIAssistant />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="profile" element={<Profile />} />
       </Route>
     </Routes>
   );
