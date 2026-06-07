@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Card, Row, Col, Input, Select, Button, Tag, Space, Spin, Empty, Modal, Form, message, Table, Upload, Steps } from 'antd';
-import { SearchOutlined, PlusOutlined, DollarOutlined, TeamOutlined, ClockCircleOutlined, EnvironmentOutlined, ImportOutlined, UploadOutlined, CheckOutlined } from '@ant-design/icons';
-import { getPositions, createPosition, batchImportPositions } from '../api/position';
+import { Card, Row, Col, Input, Select, Button, Tag, Space, Spin, Empty, Modal, Form, message, Table, Upload, Steps, Checkbox, Tooltip } from 'antd';
+import { SearchOutlined, PlusOutlined, DollarOutlined, TeamOutlined, ClockCircleOutlined, EnvironmentOutlined, ImportOutlined, UploadOutlined, CheckOutlined, EditOutlined } from '@ant-design/icons';
+import { getPositions, createPosition, batchImportPositions, batchUpdatePositions } from '../api/position';
 import { getProjects } from '../api/project';
 import { analyzeFile } from '../api/ai';
 import { useUserStore } from '../stores/user';
@@ -58,6 +58,12 @@ export default function PositionMarket() {
   const [analyzing, setAnalyzing] = useState(false);
   const [previewData, setPreviewData] = useState<any[]>([]);
   const [importing, setImporting] = useState(false);
+
+  // 批量编辑相关状态
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [batchEditOpen, setBatchEditOpen] = useState(false);
+  const [batchForm] = Form.useForm();
 
   useEffect(() => {
     loadData();
@@ -167,7 +173,8 @@ export default function PositionMarket() {
         projectId: importProjectId,
       });
       const result = res.data || res;
-      message.success(`导入完成：成功 ${result.success} 条，失败 ${result.failed} 条`);
+      const updatedMsg = result.updated ? `，其中 ${result.updated} 条为覆盖更新` : '';
+      message.success(`导入完成：成功 ${result.success} 条${updatedMsg}，失败 ${result.failed} 条`);
       if (result.errors && result.errors.length > 0) {
         Modal.warning({
           title: '部分导入失败',
@@ -200,6 +207,50 @@ export default function PositionMarket() {
   const openImportModal = () => {
     resetImportState();
     setImportModalOpen(true);
+  };
+
+  // 批量编辑
+  const toggleSelect = (id: number) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((i) => i !== id) : [...prev, id],
+    );
+  };
+
+  const selectAll = () => {
+    setSelectedIds(filtered.map((p) => p.id));
+  };
+
+  const clearSelection = () => {
+    setSelectedIds([]);
+  };
+
+  const handleBatchEdit = async () => {
+    try {
+      const values = await batchForm.validateFields();
+      // 只提交有值的字段
+      const data: any = {};
+      if (values.status) data.status = values.status;
+      if (values.urgency) data.urgency = values.urgency;
+      if (values.region) data.region = values.region;
+      if (values.deliveryForm) data.deliveryForm = values.deliveryForm;
+
+      if (Object.keys(data).length === 0) {
+        message.warning('请至少修改一个字段');
+        return;
+      }
+
+      const res: any = await batchUpdatePositions(selectedIds, data);
+      const result = res.data || res;
+      message.success(`批量编辑完成：成功 ${result.success} 条，失败 ${result.failed} 条`);
+      setBatchEditOpen(false);
+      batchForm.resetFields();
+      setSelectedIds([]);
+      setBatchMode(false);
+      loadData();
+    } catch (err: any) {
+      if (err.errorFields) return;
+      message.error(err?.message || '批量编辑失败');
+    }
   };
 
   // 预览表格列
@@ -273,6 +324,24 @@ export default function PositionMarket() {
           </Button>
         </Space>
         <Space>
+          <Button
+            icon={<EditOutlined />}
+            onClick={() => { setBatchMode(!batchMode); setSelectedIds([]); }}
+            type={batchMode ? 'primary' : 'default'}
+          >
+            {batchMode ? '退出批量' : '批量编辑'}
+          </Button>
+          {batchMode && selectedIds.length > 0 && (
+            <Button type="primary" onClick={() => { batchForm.resetFields(); setBatchEditOpen(true); }}>
+              编辑已选 ({selectedIds.length})
+            </Button>
+          )}
+          {batchMode && (
+            <Space>
+              <Button size="small" onClick={selectAll}>全选</Button>
+              <Button size="small" onClick={clearSelection}>清空</Button>
+            </Space>
+          )}
           <Button icon={<ImportOutlined />} onClick={openImportModal}>
             导入岗位
           </Button>
@@ -291,10 +360,19 @@ export default function PositionMarket() {
               <Col xs={24} sm={12} lg={8} xl={6} key={pos.id}>
                 <Card
                   hoverable
-                  style={{ borderRadius: 8, height: '100%' }}
-                  onClick={() => navigate(`/positions/${pos.id}`)}
+                  style={{
+                    borderRadius: 8,
+                    height: '100%',
+                    border: batchMode && selectedIds.includes(pos.id) ? '2px solid #1677ff' : undefined,
+                  }}
+                  onClick={batchMode ? () => toggleSelect(pos.id) : () => navigate(`/positions/${pos.id}`)}
                   styles={{ body: { padding: 20 } }}
                 >
+                  {batchMode && (
+                    <div style={{ marginBottom: 8 }}>
+                      <Checkbox checked={selectedIds.includes(pos.id)} />
+                    </div>
+                  )}
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
                     <h3 style={{ margin: 0, fontSize: 16, flex: 1, marginRight: 8 }}>{pos.positionDuty}</h3>
                     <Tag color={urgencyColorMap[pos.urgency] || 'default'}>
@@ -537,6 +615,44 @@ export default function PositionMarket() {
             />
           </div>
         )}
+      </Modal>
+
+      {/* 批量编辑弹窗 */}
+      <Modal
+        title={`批量编辑 (${selectedIds.length} 个岗位)`}
+        open={batchEditOpen}
+        onOk={handleBatchEdit}
+        onCancel={() => { setBatchEditOpen(false); batchForm.resetFields(); }}
+        destroyOnClose
+        width={520}
+      >
+        <div style={{ marginBottom: 12, color: '#8c8c8c' }}>
+          仅填写需要修改的字段，留空的字段将保持不变
+        </div>
+        <Form form={batchForm} layout="vertical">
+          <Form.Item name="status" label="岗位状态">
+            <Select placeholder="不修改" allowClear>
+              <Select.Option value="open">招聘中</Select.Option>
+              <Select.Option value="partial">部分到岗</Select.Option>
+              <Select.Option value="filled">已满员</Select.Option>
+              <Select.Option value="closed">已关闭</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="urgency" label="紧急程度">
+            <Select placeholder="不修改" allowClear>
+              <Select.Option value="low">低</Select.Option>
+              <Select.Option value="medium">中</Select.Option>
+              <Select.Option value="high">高</Select.Option>
+              <Select.Option value="critical">紧急</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="region" label="地区">
+            <Input placeholder="不修改" allowClear />
+          </Form.Item>
+          <Form.Item name="deliveryForm" label="交付形式">
+            <Input placeholder="不修改" allowClear />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

@@ -58,7 +58,7 @@ export class PositionService {
         .select('cp.positionId', 'positionId')
         .addSelect('COUNT(*)', 'recommendedCount')
         .addSelect(
-          "SUM(CASE WHEN cp.status = 'interview_passed' THEN 1 ELSE 0 END)",
+          "SUM(CASE WHEN cp.status = 'onboarded' THEN 1 ELSE 0 END)",
           'hiredCount',
         )
         .where('cp.positionId IN (:...ids)', { ids: positionIds })
@@ -97,6 +97,12 @@ export class PositionService {
     return position;
   }
 
+  async findByRequirementNumber(requirementNumber: string, projectId: number) {
+    return this.positionRepository.findOne({
+      where: { requirementNumber, projectId },
+    });
+  }
+
   async create(data: any, userId: number) {
     const mapped: any = { ...data };
     // 前端 headcount → 后端 requiredCount
@@ -120,18 +126,41 @@ export class PositionService {
     mapped.deliveryForm = mapped.deliveryForm || '未指定';
     mapped.requiredCount = mapped.requiredCount || 1;
     mapped.projectId = mapped.projectId || data.projectId;
-    // 校验 urgency 枚举值
+    // 校验 urgency 枚举值 — 彻底清理
     const validUrgency = ['low', 'medium', 'high', 'critical'];
     if (!mapped.urgency || !validUrgency.includes(mapped.urgency)) {
+      console.log(`[Position] create: invalid urgency "${mapped.urgency}", fallback to "medium"`);
       mapped.urgency = 'medium';
     }
-    // 校验 status 枚举值
+    // 校验 status 枚举值 — 彻底清理
     const validStatus = ['open', 'partial', 'filled', 'closed'];
-    if (mapped.status && !validStatus.includes(mapped.status)) {
-      delete mapped.status;
+    if (!mapped.status || !validStatus.includes(mapped.status)) {
+      mapped.status = 'open';
     }
-    const position = this.positionRepository.create(mapped) as unknown as Position;
-    position.creatorId = userId;
+    // 清理掉不属于 Position 实体的字段，避免数据库写入异常
+    const entityColumns = [
+      'systemName', 'department', 'requirementNumber', 'positionType', 'positionDuty',
+      'techDomain', 'majorType', 'levelDistribution', 'salaryRange', 'requirements',
+      'responsibilities', 'domainExperience', 'region', 'deliveryForm',
+      'positionImplementation', 'urgency', 'requiredCount', 'hiredCount',
+      'expectedDate', 'status', 'projectId', 'creatorId',
+    ];
+    const cleaned: any = {};
+    for (const key of entityColumns) {
+      if (mapped[key] !== undefined) {
+        cleaned[key] = mapped[key];
+      }
+    }
+    cleaned.creatorId = userId;
+    console.log(`[Position] create: urgency=${cleaned.urgency}, status=${cleaned.status}, requirementNumber=${cleaned.requirementNumber}`);
+    const position = this.positionRepository.create(cleaned) as unknown as Position;
+    // save前再次确认枚举值合法
+    if (!validUrgency.includes(position.urgency)) {
+      position.urgency = 'medium' as any;
+    }
+    if (!validStatus.includes(position.status as any)) {
+      position.status = 'open' as any;
+    }
     const result: any = await this.positionRepository.save(position);
     await this.logService.log(userId, 'create', 'position', result.id, {
       positionDuty: result.positionDuty,
@@ -139,15 +168,87 @@ export class PositionService {
     return result;
   }
 
-  async update(id: number, data: Partial<Position>, userId: number) {
+  async update(id: number, data: any, userId: number) {
     const position = await this.positionRepository.findOne({ where: { id } });
     if (!position) {
       throw new NotFoundException('岗位不存在');
     }
-    Object.assign(position, data);
+    // 校验 urgency 枚举值
+    const validUrgency = ['low', 'medium', 'high', 'critical'];
+    if (data.urgency && !validUrgency.includes(data.urgency)) {
+      console.log(`[Position] update: invalid urgency "${data.urgency}", fallback to "medium"`);
+      data.urgency = 'medium';
+    }
+    // 校验 status 枚举值
+    const validStatus = ['open', 'partial', 'filled', 'closed'];
+    if (data.status && !validStatus.includes(data.status)) {
+      console.log(`[Position] update: invalid status "${data.status}", fallback to "open"`);
+      data.status = 'open';
+    }
+    // 清理掉不属于 Position 实体的字段
+    const entityColumns = [
+      'systemName', 'department', 'requirementNumber', 'positionType', 'positionDuty',
+      'techDomain', 'majorType', 'levelDistribution', 'salaryRange', 'requirements',
+      'responsibilities', 'domainExperience', 'region', 'deliveryForm',
+      'positionImplementation', 'urgency', 'requiredCount', 'hiredCount',
+      'expectedDate', 'status', 'projectId', 'creatorId',
+    ];
+    const cleaned: any = {};
+    for (const key of Object.keys(data)) {
+      if (entityColumns.includes(key)) {
+        cleaned[key] = data[key];
+      }
+    }
+    Object.assign(position, cleaned);
+    // 确保合并后的 position 的 urgency 和 status 也合法
+    if (!validUrgency.includes(position.urgency)) {
+      position.urgency = 'medium' as any;
+    }
+    if (!position.status || !validStatus.includes(position.status as any)) {
+      position.status = 'open' as any;
+    }
+    console.log(`[Position] update id=${id}: urgency=${position.urgency}, status=${position.status}`);
     const result = await this.positionRepository.save(position);
-    await this.logService.log(userId, 'update', 'position', id, data);
+    await this.logService.log(userId, 'update', 'position', id, cleaned);
     return result;
+  }
+
+  async batchUpdate(ids: number[], data: Partial<any>, userId: number) {
+    if (!ids || ids.length === 0) {
+      throw new NotFoundException('请选择要编辑的岗位');
+    }
+    // 校验枚举字段
+    const validUrgency = ['low', 'medium', 'high', 'critical'];
+    const validStatus = ['open', 'partial', 'filled', 'closed'];
+    if (data.urgency && !validUrgency.includes(data.urgency)) {
+      delete data.urgency;
+    }
+    if (data.status && !validStatus.includes(data.status)) {
+      delete data.status;
+    }
+    let success = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const position = await this.positionRepository.findOne({ where: { id } });
+        if (!position) {
+          failed++;
+          continue;
+        }
+        Object.assign(position, data);
+        await this.positionRepository.save(position);
+        success++;
+      } catch {
+        failed++;
+      }
+    }
+    await this.logService.log(userId, 'batch_update', 'position', null, {
+      ids,
+      data,
+      success,
+      failed,
+    });
+    return { success, failed };
   }
 
   async remove(id: number, userId: number) {

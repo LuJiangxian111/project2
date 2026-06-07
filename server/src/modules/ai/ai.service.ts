@@ -378,58 +378,17 @@ ${positions
   async analyzeFileForImport(fileContent: string, fileName: string, instruction: string, userId: number) {
     const { client, model } = await this.getClient(userId);
 
-    const prompt = `你是一个数据导入助手。请分析以下文件样本数据，识别其中的数据是"岗位需求"还是"候选人推荐"，然后建立字段映射关系。
+    const prompt = `分析文件样本，识别是"岗位需求"还是"候选人推荐"，建立字段映射。
 
-系统岗位需求标准字段：
-- systemName: 系统
-- department: 部门
-- requirementNumber: 需求编号
-- positionType: 岗位类型
-- positionDuty: 岗位职务
-- techDomain: 技术领域
-- majorType: 专业类型
-- levelDistribution: 职级分布
-- salaryRange: 薪资范围
-- requirements: 岗位要求
-- responsibilities: 岗位职责
-- domainExperience: 领域经验
-- region: 地区
-- deliveryForm: 交付形式
-- positionImplementation: 岗位实施
-- urgency: 紧急程度(low/medium/high/critical)
-- requiredCount: 需求人数
-- expectedDate: 期望到岗日期
+岗位字段：systemName(系统), department(部门), requirementNumber(需求编号), positionType(岗位类型), positionDuty(岗位职务), techDomain(技术领域), majorType(专业类型), levelDistribution(职级分布), salaryRange(薪资范围), requirements(岗位要求), responsibilities(岗位职责), domainExperience(领域经验), region(地区), deliveryForm(交付形式), positionImplementation(岗位实施), urgency(紧急程度low/medium/high/critical), requiredCount(需求人数), expectedDate(期望到岗日期)
 
-系统候选人标准字段：
-- name: 姓名
-- gender: 性别
-- idType: 证件类型
-- idNumber: 证件号码
-- contactPhone: 联系电话
-- contactEmail: 联系邮箱
-- areaCode: 区号
-- supplier: 供应商
-- educationType: 学历类型
-- education: 学历
-- graduationDate: 毕业时间
-- domainYears: 领域年限
-- workStatus: 工作状态
-- expectedSalary: 期望薪资
+候选人字段：name(姓名), gender(性别), idType(证件类型), idNumber(证件号码), contactPhone(联系电话), contactEmail(联系邮箱), areaCode(区号), supplier(供应商), educationType(学历类型), education(学历), graduationDate(毕业时间), domainYears(领域年限), workStatus(工作状态), expectedSalary(期望薪资), recommender(推荐人), recommendReason(推荐理由)
 
-请返回JSON格式：
-{
-  "type": "position" 或 "candidate",
-  "fieldMapping": { "文件中的列名1": "系统标准字段名1", "文件中的列名2": "系统标准字段名2", ... },
-  "unmappedFields": { "无法映射的列名": "示例值" },
-  "summary": "文件内容摘要"
-}
+候选人文件中的岗位关联字段（必须映射）：systemName, department, requirementNumber, positionType, positionDuty, techDomain, majorType, levelDistribution, salaryRange, region, deliveryForm
 
-注意事项：
-1. fieldMapping 中键是文件中的原始列名，值是对应的系统标准字段名
-2. 尽可能将文件中的每个列映射到系统标准字段
-3. 无法映射的列放在 unmappedFields 中
-4. 如果用户有额外指令，优先按用户指令处理
-5. 只返回JSON，不要返回其他内容
+返回JSON：{"type":"position或candidate","fieldMapping":{"文件列名":"系统字段名"},"unmappedFields":{"无法映射列":"示例值"},"summary":"摘要"}
+
+注意：语义匹配！"岗位/职位"→positionDuty, "岗位类型"→positionType, "手机/电话"→contactPhone, "邮箱"→contactEmail, "身份证号"→idNumber, "工作年限"→domainYears, "供应商/公司"→supplier。候选人文件必须映射所有岗位相关列。
 
 ${instruction ? `用户指令：${instruction}\n\n` : ''}文件名：${fileName}
 
@@ -439,16 +398,27 @@ ${fileContent}`;
     console.log(`[AI] analyzeFileForImport: fileName=${fileName}, contentLen=${fileContent.length}, model=${model}`);
 
     let response;
-    try {
-      response = await client.chat.completions.create({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2,
-        timeout: 180000,
-      });
-    } catch (apiErr: any) {
-      console.error('[AI] analyzeFileForImport API error:', apiErr?.message || apiErr);
-      throw apiErr;
+    let lastErr: any;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        console.log(`[AI] analyzeFileForImport attempt ${attempt}/3`);
+        response = await client.chat.completions.create({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.2,
+        }, { timeout: 120000 });
+        break; // 成功则跳出
+      } catch (apiErr: any) {
+        lastErr = apiErr;
+        console.error(`[AI] analyzeFileForImport attempt ${attempt} error:`, apiErr?.message || apiErr);
+        if (attempt < 3) {
+          await new Promise(r => setTimeout(r, 2000 * attempt)); // 递增等待
+        }
+      }
+    }
+    if (!response) {
+      console.error('[AI] analyzeFileForImport all attempts failed');
+      throw lastErr;
     }
 
     const content = response.choices[0]?.message?.content || '{}';
@@ -506,8 +476,7 @@ ${fileContent}`;
       model,
       messages: finalMessages as any,
       temperature: 0.5,
-      timeout: 120000,
-    });
+    }, { timeout: 120000 });
 
     await this.logService.log(userId, 'ai_chat_with_file', 'ai', null, {
       model,

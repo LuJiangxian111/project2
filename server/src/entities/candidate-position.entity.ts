@@ -46,6 +46,8 @@ export class CandidatePosition {
       'interview_passed',
       'interview_rejected',
       'abandoned',
+      'pending_onboard',
+      'onboarded',
     ],
     default: 'pending_screen',
   })
@@ -56,7 +58,9 @@ export class CandidatePosition {
     | 'pending_interview'
     | 'interview_passed'
     | 'interview_rejected'
-    | 'abandoned';
+    | 'abandoned'
+    | 'pending_onboard'
+    | 'onboarded';
 
   @Column({ name: 'recommend_reason', type: 'text', nullable: true })
   recommendReason: string;
@@ -69,6 +73,9 @@ export class CandidatePosition {
 
   @Column({ name: 'implementation', length: 200, nullable: true })
   implementation: string;
+
+  @Column({ name: 'resume_url', nullable: true })
+  resumeUrl: string;
 
   @Column({ name: 'recommended_at', type: 'datetime' })
   recommendedAt: Date;

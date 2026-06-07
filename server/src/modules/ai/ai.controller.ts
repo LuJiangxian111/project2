@@ -14,6 +14,22 @@ import { diskStorage } from 'multer';
 import { join } from 'path';
 import * as XLSX from 'xlsx';
 
+// 提取文件文本内容
+function extractFileContent(file: Express.Multer.File): string {
+  if (!file) return '';
+  if (file.buffer) {
+    const ext = (file.originalname || '').split('.').pop()?.toLowerCase();
+    if (ext === 'xlsx' || ext === 'xls') {
+      const workbook = XLSX.read(file.buffer, { type: 'buffer', codepage: 65001 });
+      const sheetName = workbook.SheetNames[0];
+      const sheet = workbook.Sheets[sheetName];
+      return XLSX.utils.sheet_to_csv(sheet);
+    }
+    return file.buffer.toString('utf-8');
+  }
+  return file.originalname || '';
+}
+
 // 解析上传文件为结构化数据
 function parseFileToRows(file: Express.Multer.File): { headers: string[]; rows: Record<string, string>[]; sampleText: string } {
   if (!file || !file.buffer) return { headers: [], rows: [], sampleText: '' };
@@ -94,15 +110,18 @@ export class AiController {
   }
 
   @Post('analyze-file')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024 } }))
   async analyzeFile(
     @UploadedFile() file: Express.Multer.File,
-    @Body() body: { instruction?: string },
+    @Body() body: any,
     @CurrentUser() user: any,
   ) {
     try {
+      if (!file || !file.buffer) {
+        return { type: 'unknown', items: [], rawContent: '', summary: '未接收到文件，请重新上传' };
+      }
       const { headers, rows, sampleText } = parseFileToRows(file);
-      const fileName = Buffer.from(file?.originalname || '未知文件', 'latin1').toString('utf-8');
+      const fileName = Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8');
       const instruction = body.instruction || '';
 
       if (!rows.length) {
@@ -138,7 +157,7 @@ export class AiController {
       // AI 没有返回 fieldMapping，回退
       return aiResult;
     } catch (err: any) {
-      console.error('analyze-file error:', err?.message || err);
+      console.error('[AI] analyze-file error:', err?.message || err, err?.stack?.split('\n').slice(0, 3));
       return { type: 'unknown', items: [], rawContent: '', summary: `分析失败: ${err?.message || '未知错误'}` };
     }
   }

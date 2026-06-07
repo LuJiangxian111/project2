@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  Table, Input, Button, Space, Tag, Select, Badge, Modal, Checkbox,
+  Table, Input, Button, Space, Tag, Select, Badge, Modal, Checkbox, Descriptions, Divider, Spin, message,
 } from 'antd';
 import {
   SearchOutlined, UserOutlined, DownOutlined, RightOutlined, ExportOutlined,
@@ -8,10 +8,11 @@ import {
 } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import {
-  getCandidatesGrouped, updateCandidatePositionStatus,
+  getCandidatesGrouped, updateCandidatePositionStatus, getCandidate,
 } from '../api/candidate';
 import { getPositions } from '../api/position';
 import { getProjects } from '../api/project';
+import StatusTag from '../components/StatusTag';
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending_screen: { label: '待筛选', color: 'default' },
@@ -21,6 +22,8 @@ const STATUS_MAP: Record<string, { label: string; color: string }> = {
   interview_passed: { label: '面试通过', color: 'green' },
   interview_rejected: { label: '面试不通过', color: 'volcano' },
   abandoned: { label: '放弃面试', color: 'default' },
+  pending_onboard: { label: '待入职', color: 'cyan' },
+  onboarded: { label: '已入职', color: 'geekblue' },
 };
 
 const STATUS_OPTIONS = Object.entries(STATUS_MAP).map(([value, { label }]) => ({
@@ -48,6 +51,7 @@ const DEFAULT_EXPORT_FIELDS: ExportField[] = [
   { key: 'domainYears', label: '领域年限', group: 'candidate' },
   { key: 'workStatus', label: '工作状态', group: 'candidate' },
   { key: 'expectedSalary', label: '期望薪资', group: 'candidate' },
+  { key: 'resumeUrl', label: '简历', group: 'candidate' },
   { key: 'projectName', label: '项目', group: 'position' },
   { key: 'requirementNumber', label: '需求编号', group: 'position' },
   { key: 'positionType', label: '岗位类型', group: 'position' },
@@ -106,6 +110,25 @@ export default function CandidateList() {
   const [projects, setProjects] = useState<any[]>([]);
   const [positions, setPositions] = useState<any[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+
+  // 候选人详情弹窗
+  const [candidateDetailOpen, setCandidateDetailOpen] = useState(false);
+  const [candidateDetail, setCandidateDetail] = useState<any>(null);
+  const [candidateDetailLoading, setCandidateDetailLoading] = useState(false);
+
+  const handleViewCandidate = async (candidateId: number) => {
+    try {
+      setCandidateDetailLoading(true);
+      setCandidateDetailOpen(true);
+      const res: any = await getCandidate(candidateId);
+      const data = res.data || res;
+      setCandidateDetail(data);
+    } catch {
+      message.error('获取候选人详情失败');
+    } finally {
+      setCandidateDetailLoading(false);
+    }
+  };
 
   // 导出相关状态
   const [exportModalOpen, setExportModalOpen] = useState(false);
@@ -380,13 +403,10 @@ export default function CandidateList() {
               const key = `${record.name}_${record.contactPhone || record.phone}`;
               const isExpanded = expandedKeys.has(key);
               return (
-                <div
-                  style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}
-                  onClick={() => toggleExpand(key)}
-                >
-                  {isExpanded ? <DownOutlined style={{ fontSize: 12 }} /> : <RightOutlined style={{ fontSize: 12 }} />}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {isExpanded ? <DownOutlined style={{ fontSize: 12, cursor: 'pointer' }} onClick={() => toggleExpand(key)} /> : <RightOutlined style={{ fontSize: 12, cursor: 'pointer' }} onClick={() => toggleExpand(key)} />}
                   <UserOutlined style={{ color: '#1890ff' }} />
-                  <span style={{ fontWeight: 500 }}>{record.name}</span>
+                  <a onClick={() => handleViewCandidate(record.candidateIds?.[0])} style={{ fontWeight: 500 }}>{record.name}</a>
                   <Badge count={record.positions.length} style={{ marginLeft: 4 }} />
                 </div>
               );
@@ -483,6 +503,12 @@ export default function CandidateList() {
                   render: (_: any, pos: any) => pos.pushDate ? pos.pushDate.substring(0, 10) : '-',
                 },
                 {
+                  title: '简历',
+                  key: 'resumeUrl',
+                  width: 80,
+                  render: (_: any, pos: any) => pos.resumeUrl ? <a href={pos.resumeUrl} target="_blank" rel="noopener noreferrer">查看</a> : '-',
+                },
+                {
                   title: '状态',
                   key: 'status',
                   width: 160,
@@ -501,6 +527,109 @@ export default function CandidateList() {
           ),
         }}
       />
+
+      {/* 候选人详情弹窗 */}
+      <Modal
+        title="候选人详情"
+        open={candidateDetailOpen}
+        onCancel={() => { setCandidateDetailOpen(false); setCandidateDetail(null); }}
+        footer={null}
+        width={720}
+        destroyOnClose
+      >
+        {candidateDetailLoading ? (
+          <Spin style={{ display: 'block', margin: '40px auto' }} />
+        ) : candidateDetail ? (
+          <div>
+            <Descriptions title={candidateDetail.name} column={2} size="small" bordered>
+              <Descriptions.Item label="性别">{candidateDetail.gender || '-'}</Descriptions.Item>
+              <Descriptions.Item label="证件类型">{candidateDetail.idType || '-'}</Descriptions.Item>
+              <Descriptions.Item label="证件号码">{candidateDetail.idNumber || '-'}</Descriptions.Item>
+              <Descriptions.Item label="联系电话">{candidateDetail.contactPhone || '-'}</Descriptions.Item>
+              <Descriptions.Item label="联系邮箱">{candidateDetail.contactEmail || '-'}</Descriptions.Item>
+              <Descriptions.Item label="区号">{candidateDetail.areaCode || '-'}</Descriptions.Item>
+              <Descriptions.Item label="供应商">{candidateDetail.supplier || '-'}</Descriptions.Item>
+              <Descriptions.Item label="学历类型">{candidateDetail.educationType || '-'}</Descriptions.Item>
+              <Descriptions.Item label="学历">{candidateDetail.education || '-'}</Descriptions.Item>
+              <Descriptions.Item label="毕业时间">{candidateDetail.graduationDate ? candidateDetail.graduationDate.substring(0, 10) : '-'}</Descriptions.Item>
+              <Descriptions.Item label="领域年限">{candidateDetail.domainYears != null ? `${candidateDetail.domainYears}年` : '-'}</Descriptions.Item>
+              <Descriptions.Item label="工作状态">{candidateDetail.workStatus || '-'}</Descriptions.Item>
+              <Descriptions.Item label="期望薪资">{candidateDetail.expectedSalary || '-'}</Descriptions.Item>
+              <Descriptions.Item label="简历" span={2}>
+                {candidateDetail.resumeUrl ? (
+                  <a href={candidateDetail.resumeUrl} target="_blank" rel="noopener noreferrer">查看简历</a>
+                ) : '-'}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Divider orientation="left" style={{ marginTop: 24 }}>
+              关联岗位 ({candidateDetail.candidatePositions?.length || 0})
+            </Divider>
+
+            {candidateDetail.candidatePositions?.length > 0 ? (
+              <Table
+                dataSource={candidateDetail.candidatePositions}
+                rowKey="id"
+                size="small"
+                pagination={false}
+                columns={[
+                  {
+                    title: '项目',
+                    key: 'project',
+                    render: (_: any, record: any) => record.position?.project?.name || '-',
+                  },
+                  {
+                    title: '需求编号',
+                    key: 'requirementNumber',
+                    render: (_: any, record: any) => record.position?.requirementNumber || '-',
+                  },
+                  {
+                    title: '岗位职务',
+                    key: 'positionDuty',
+                    render: (_: any, record: any) => record.position?.positionDuty || '-',
+                  },
+                  {
+                    title: '岗位类型',
+                    key: 'positionType',
+                    render: (_: any, record: any) => record.position?.positionType || '-',
+                  },
+                  {
+                    title: '技术领域',
+                    key: 'techDomain',
+                    render: (_: any, record: any) => record.position?.techDomain || '-',
+                  },
+                  {
+                    title: '推荐人',
+                    dataIndex: 'recommender',
+                    key: 'recommender',
+                    render: (v: string) => v || '-',
+                  },
+                  {
+                    title: '推送日期',
+                    dataIndex: 'pushDate',
+                    key: 'pushDate',
+                    render: (v: string) => v ? v.substring(0, 10) : '-',
+                  },
+                  {
+                    title: '简历',
+                    dataIndex: 'resumeUrl',
+                    key: 'resumeUrl',
+                    render: (v: string) => v ? <a href={v} target="_blank" rel="noopener noreferrer">查看</a> : '-',
+                  },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    key: 'status',
+                    render: (v: string) => <StatusTag status={v} type="candidate" />,
+                  },
+                ]}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', color: '#999', padding: 16 }}>暂无关联岗位</div>
+            )}
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }

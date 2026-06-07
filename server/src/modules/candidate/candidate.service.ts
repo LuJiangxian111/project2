@@ -127,6 +127,7 @@ export class CandidateService {
           recommender: cp.recommender,
           pushDate: cp.pushDate,
           implementation: cp.implementation,
+          resumeUrl: cp.resumeUrl,
           recommendedAt: cp.recommendedAt,
           updatedAt: cp.updatedAt,
         })),
@@ -151,8 +152,25 @@ export class CandidateService {
     if (!cp) {
       throw new NotFoundException('候选人岗位关联不存在');
     }
+    const oldStatus = cp.status;
     cp.status = status as any;
     const result = await this.candidatePositionRepository.save(cp);
+
+    // 状态变为已入职时，岗位已录用人数+1；从已入职变为其他状态时，岗位已录用人数-1
+    if (status === 'onboarded' && oldStatus !== 'onboarded' && cp.position) {
+      const pos = await this.positionRepository.findOneBy({ id: cp.position.id });
+      if (pos) {
+        pos.hiredCount = (pos.hiredCount || 0) + 1;
+        await this.positionRepository.save(pos);
+      }
+    } else if (status !== 'onboarded' && oldStatus === 'onboarded' && cp.position) {
+      const pos = await this.positionRepository.findOneBy({ id: cp.position.id });
+      if (pos) {
+        pos.hiredCount = Math.max(0, (pos.hiredCount || 0) - 1);
+        await this.positionRepository.save(pos);
+      }
+    }
+
     await this.logService.log(userId, 'update_status', 'candidate_position', cpId, {
       candidateName: cp.candidate?.name,
       positionTitle: cp.position?.positionDuty,
@@ -164,12 +182,36 @@ export class CandidateService {
   async findOne(id: number) {
     const candidate = await this.candidateRepository.findOne({
       where: { id },
-      relations: ['candidatePositions', 'candidatePositions.position'],
+      relations: ['candidatePositions', 'candidatePositions.position', 'candidatePositions.position.project'],
     });
     if (!candidate) {
       throw new NotFoundException('候选人不存在');
     }
-    return candidate;
+
+    // 按同名同电话查找该候选人在其他记录下的关联岗位
+    const samePersonCandidates = await this.candidateRepository.find({
+      where: [
+        { name: candidate.name, contactPhone: candidate.contactPhone || '' },
+      ],
+      relations: ['candidatePositions', 'candidatePositions.position', 'candidatePositions.position.project'],
+    });
+
+    // 合并所有同名同电话候选人的关联岗位
+    const allPositions: any[] = [];
+    const seenCpIds = new Set<number>();
+    for (const c of samePersonCandidates) {
+      for (const cp of c.candidatePositions || []) {
+        if (!seenCpIds.has(cp.id)) {
+          seenCpIds.add(cp.id);
+          allPositions.push(cp);
+        }
+      }
+    }
+
+    return {
+      ...candidate,
+      candidatePositions: allPositions,
+    };
   }
 
   async create(data: Partial<Candidate>, userId: number) {

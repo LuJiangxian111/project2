@@ -68,5 +68,11 @@ export const deletePosition = (id: number) => request.delete(`/positions/${id}`)
 export const addCandidateToPosition = (positionId: number, data: { candidateId: number }) =>
   request.post(`/positions/${positionId}/candidates`, data);
 export const getPositionCandidates = (positionId: number) => request.get(`/positions/${positionId}/candidates`);
+export const batchImportCandidates = (positionId: number, items: any[]) =>
+  request.post(`/positions/${positionId}/candidates/batch-import`, { items });
+
 export const batchImportPositions = (data: { items: any[]; projectId: number }) =>
   request.post('/positions/batch-import', data);
+
+export const batchUpdatePositions = (ids: number[], data: Partial<any>) =>
+  request.put('/positions/batch/update', { ids, data });

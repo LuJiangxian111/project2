@@ -22,6 +22,7 @@ export class AuthController {
       password: string;
       name: string;
       role: string;
+      adminKey?: string;
     },
   ) {
     return this.authService.register(
@@ -29,6 +30,7 @@ export class AuthController {
       body.password,
       body.name,
       body.role,
+      body.adminKey,
     );
   }
 

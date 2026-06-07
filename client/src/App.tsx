@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
 import { useUserStore } from './stores/user';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
@@ -19,6 +20,12 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  const loadUser = useUserStore((s) => s.loadUser);
+
+  useEffect(() => {
+    loadUser();
+  }, []);
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

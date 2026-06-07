@@ -27,6 +27,8 @@ const candidateStatusMap: Record<string, { color: string; label: string }> = {
   interview_passed: { color: 'green', label: '面试通过' },
   interview_rejected: { color: 'volcano', label: '面试不通过' },
   abandoned: { color: 'default', label: '放弃面试' },
+  pending_onboard: { color: 'cyan', label: '待入职' },
+  onboarded: { color: 'geekblue', label: '已入职' },
 };
 
 const interviewStatusMap: Record<string, { color: string; label: string }> = {

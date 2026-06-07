@@ -1,24 +1,44 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Form, Input, Button, Card, message, Row, Col, Typography } from 'antd';
-import { UserOutlined, LockOutlined, RobotOutlined } from '@ant-design/icons';
+import { Form, Input, Button, Card, message, Row, Col, Typography, Select } from 'antd';
+import { UserOutlined, LockOutlined, RobotOutlined, TeamOutlined, SafetyOutlined } from '@ant-design/icons';
 import { useUserStore } from '../stores/user';
+import { register as registerApi } from '../api/auth';
 
 const { Title, Paragraph } = Typography;
 
 export default function Login() {
   const [loading, setLoading] = useState(false);
+  const [isRegister, setIsRegister] = useState(false);
+  const [selectedRole, setSelectedRole] = useState<string>('hr');
   const navigate = useNavigate();
   const login = useUserStore((s) => s.login);
 
-  const handleSubmit = async (values: { username: string; password: string }) => {
+  const handleLogin = async (values: { username: string; password: string }) => {
     try {
       setLoading(true);
       await login(values.username, values.password);
       message.success('登录成功');
       navigate('/');
     } catch (err: any) {
-      message.error(err.message || '登录失败');
+      message.error(err?.response?.data?.message || err.message || '登录失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async (values: { username: string; password: string; name: string; role: string; adminKey?: string }) => {
+    try {
+      setLoading(true);
+      const payload: any = { ...values };
+      if (values.role !== 'admin') {
+        delete payload.adminKey;
+      }
+      await registerApi(payload);
+      message.success('注册成功，请登录');
+      setIsRegister(false);
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || err.message || '注册失败');
     } finally {
       setLoading(false);
     }
@@ -76,34 +96,100 @@ export default function Login() {
             <div style={{ textAlign: 'center', marginBottom: 32 }}>
               <RobotOutlined style={{ fontSize: 40, color: '#667eea' }} />
               <Title level={3} style={{ marginTop: 12, marginBottom: 4 }}>
-                欢迎登录
+                {isRegister ? '注册账号' : '欢迎登录'}
               </Title>
-              <Paragraph type="secondary">请输入您的账号和密码</Paragraph>
+              <Paragraph type="secondary">
+                {isRegister ? '创建您的账号以使用平台' : '请输入您的账号和密码'}
+              </Paragraph>
             </div>
-            <Form onFinish={handleSubmit} size="large">
-              <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-                <Input prefix={<UserOutlined />} placeholder="用户名" />
-              </Form.Item>
-              <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-                <Input.Password prefix={<LockOutlined />} placeholder="密码" />
-              </Form.Item>
-              <Form.Item>
-                <Button
-                  type="primary"
-                  htmlType="submit"
-                  loading={loading}
-                  block
-                  style={{
-                    height: 44,
-                    borderRadius: 8,
-                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    border: 'none',
-                  }}
-                >
-                  登 录
-                </Button>
-              </Form.Item>
-            </Form>
+
+            {isRegister ? (
+              <Form onFinish={handleRegister} size="large">
+                <Form.Item name="username" rules={[
+                  { required: true, message: '请输入用户名' },
+                  { min: 3, message: '用户名至少3个字符' },
+                ]}>
+                  <Input prefix={<UserOutlined />} placeholder="用户名" />
+                </Form.Item>
+                <Form.Item name="name" rules={[{ required: true, message: '请输入姓名' }]}>
+                  <Input prefix={<TeamOutlined />} placeholder="姓名" />
+                </Form.Item>
+                <Form.Item name="password" rules={[
+                  { required: true, message: '请输入密码' },
+                  { min: 6, message: '密码至少6个字符' },
+                ]}>
+                  <Input.Password prefix={<LockOutlined />} placeholder="密码" />
+                </Form.Item>
+                <Form.Item name="role" initialValue="hr" rules={[{ required: true, message: '请选择角色' }]}>
+                  <Select
+                    placeholder="选择角色"
+                    onChange={(val) => setSelectedRole(val)}
+                    options={[
+                      { value: 'admin', label: '管理员' },
+                      { value: 'hr', label: 'HR' },
+                      { value: 'pm', label: '项目经理' },
+                      { value: 'interviewer', label: '面试官' },
+                    ]}
+                  />
+                </Form.Item>
+                {selectedRole === 'admin' && (
+                  <Form.Item
+                    name="adminKey"
+                    label="管理员注册密码"
+                    rules={[{ required: true, message: '请输入管理员注册密码' }]}
+                  >
+                    <Input.Password prefix={<SafetyOutlined />} placeholder="请输入管理员注册密码" />
+                  </Form.Item>
+                )}
+                <Form.Item>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    loading={loading}
+                    block
+                    style={{
+                      height: 44,
+                      borderRadius: 8,
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      border: 'none',
+                    }}
+                  >
+                    注 册
+                  </Button>
+                </Form.Item>
+                <div style={{ textAlign: 'center' }}>
+                  <a onClick={() => setIsRegister(false)}>已有账号？返回登录</a>
+                </div>
+              </Form>
+            ) : (
+              <Form onFinish={handleLogin} size="large">
+                <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
+                  <Input prefix={<UserOutlined />} placeholder="用户名" />
+                </Form.Item>
+                <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
+                  <Input.Password prefix={<LockOutlined />} placeholder="密码" />
+                </Form.Item>
+                <Form.Item>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    loading={loading}
+                    block
+                    style={{
+                      height: 44,
+                      borderRadius: 8,
+                      background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                      border: 'none',
+                    }}
+                  >
+                    登 录
+                  </Button>
+                </Form.Item>
+                <div style={{ textAlign: 'center' }}>
+                  <a onClick={() => setIsRegister(true)}>没有账号？立即注册</a>
+                </div>
+              </Form>
+            )}
           </Card>
         </Col>
       </Row>

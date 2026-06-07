@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Input, Button, List, Card, Space, Avatar, Spin, message, Modal, Typography, Tag, Table, Popconfirm, Select, Tooltip } from 'antd';
+import { Input, Button, List, Card, Space, Avatar, Spin, message, Modal, Typography, Tag, Popconfirm } from 'antd';
 import {
   SendOutlined,
   RobotOutlined,
@@ -12,16 +12,11 @@ import {
   PlusOutlined,
   PaperClipOutlined,
   CloseCircleOutlined,
-  ImportOutlined,
-  CheckCircleOutlined,
   DeleteOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
-import { chatWithAI, chatWithFile, analyzeFile } from '../api/ai';
-import { createPosition, addCandidateToPosition, getPositions } from '../api/position';
-import { createCandidate } from '../api/candidate';
-import { getProjects } from '../api/project';
+import { chatWithAI, chatWithFile } from '../api/ai';
 
 const { Paragraph } = Typography;
 
@@ -31,12 +26,6 @@ interface ChatMessage {
   content: string;
   timestamp: Date;
   fileName?: string;
-  importData?: {
-    type: 'position' | 'candidate';
-    items: any[];
-    unmappedFields?: Record<string, string>;
-    summary?: string;
-  };
 }
 
 interface ChatSession {
@@ -66,14 +55,12 @@ function loadSessions(): { sessions: ChatSession[]; activeId: string } {
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        // 兼容旧数据：确保每个session的messages是数组
         const sessions = parsed.map((s: any) => ({
           ...s,
           messages: Array.isArray(s.messages)
             ? s.messages.map((m: any) => ({
                 ...m,
                 role: m.role || 'assistant',
-                importData: m.importData || undefined,
               }))
             : [],
         }));
@@ -81,7 +68,6 @@ function loadSessions(): { sessions: ChatSession[]; activeId: string } {
       }
     }
   } catch {
-    // 数据损坏时清除
     try { localStorage.removeItem(CHAT_STORAGE_KEY); localStorage.removeItem(ACTIVE_SESSION_KEY); } catch { /* ignore */ }
   }
   const defaultSession = { id: '1', title: '新对话', messages: [], createdAt: new Date().toISOString() };
@@ -95,26 +81,6 @@ function saveSessions(sessions: ChatSession[], activeId: string) {
   } catch { /* ignore */ }
 }
 
-// 岗位字段中文映射
-const POSITION_FIELD_LABELS: Record<string, string> = {
-  systemName: '系统', department: '部门', requirementNumber: '需求编号',
-  positionType: '岗位类型', positionDuty: '岗位职务', techDomain: '技术领域',
-  majorType: '专业类型', levelDistribution: '职级分布', salaryRange: '薪资范围',
-  requirements: '岗位要求', responsibilities: '岗位职责', domainExperience: '领域经验',
-  region: '地区', deliveryForm: '交付形式', positionImplementation: '岗位实施',
-  urgency: '紧急程度', requiredCount: '需求人数', expectedDate: '期望到岗日期',
-  projectId: '所属项目',
-};
-
-// 候选人字段中文映射
-const CANDIDATE_FIELD_LABELS: Record<string, string> = {
-  name: '姓名', gender: '性别', idType: '证件类型', idNumber: '证件号码',
-  contactPhone: '联系电话', contactEmail: '联系邮箱', areaCode: '区号',
-  supplier: '供应商', educationType: '学历类型', education: '学历',
-  graduationDate: '毕业时间', domainYears: '领域年限', workStatus: '工作状态',
-  expectedSalary: '期望薪资', positionId: '推荐岗位',
-};
-
 export default function AIAssistant() {
   const [sessions, setSessions] = useState<ChatSession[]>(() => loadSessions().sessions);
   const [activeSessionId, setActiveSessionId] = useState<string>(() => loadSessions().activeId);
@@ -122,12 +88,6 @@ export default function AIAssistant() {
   const [sending, setSending] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [attachedFile, setAttachedFile] = useState<File | null>(null);
-  const [importing, setImporting] = useState(false);
-  const [projectList, setProjectList] = useState<any[]>([]);
-  const [positionList, setPositionList] = useState<any[]>([]);
-  const [importModalVisible, setImportModalVisible] = useState(false);
-  const [importModalData, setImportModalData] = useState<{ msgId: string; importData: ChatMessage['importData'] } | null>(null);
-  const [selectedProjectId, setSelectedProjectId] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -142,20 +102,13 @@ export default function AIAssistant() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeSession?.messages]);
 
-  // 加载项目和岗位列表
-  useEffect(() => {
-    getProjects().then((res: any) => setProjectList(res.data || res || []));
-    getPositions().then((res: any) => setPositionList(res.data || res || []));
-  }, []);
-
-  const addMessage = (role: 'user' | 'assistant' | 'system', content: string, fileName?: string, importData?: any) => {
+  const addMessage = (role: 'user' | 'assistant' | 'system', content: string, fileName?: string) => {
     const msg: ChatMessage = {
       id: Date.now().toString(),
       role,
       content,
       timestamp: new Date(),
       fileName,
-      importData,
     };
     setSessions((prev) =>
       prev.map((s) => {
@@ -168,135 +121,27 @@ export default function AIAssistant() {
     return msg;
   };
 
-  const updateMessage = (msgId: string, updates: Partial<ChatMessage>) => {
-    setSessions((prev) =>
-      prev.map((s) => {
-        if (s.id !== activeSessionId) return s;
-        return {
-          ...s,
-          messages: s.messages.map((m) => (m.id === msgId ? { ...m, ...updates } : m)),
-        };
-      }),
-    );
-  };
-
-  // 智能导入：分析文件
-  const handleAnalyzeFile = async () => {
-    if (!attachedFile) return;
-    const file = attachedFile;
-    const instruction = inputValue.trim();
-    setAttachedFile(null);
-    setInputValue('');
-    setSending(true);
-
-    addMessage('user', instruction || `请帮我导入文件：${file.name}`, file.name);
-
-    try {
-      const res: any = await analyzeFile(file, instruction);
-      const data = res.data || res;
-
-      if (data.type === 'position' || data.type === 'candidate') {
-        const typeLabel = data.type === 'position' ? '岗位需求' : '候选人推荐';
-        const count = data.items?.length || 0;
-        addMessage(
-          'assistant',
-          `已识别文件为**${typeLabel}**数据，共${count}条记录。\n\n${data.summary || ''}\n\n请在下方预览表格中确认数据，选择对应的项目/岗位后点击"确认导入"。`,
-          undefined,
-          data,
-        );
-      } else {
-        addMessage('assistant', data.rawContent || '无法识别文件内容，请确认文件格式后重试。');
-      }
-    } catch (err: any) {
-      const errMsg = err?.response?.data?.message || err?.message || '未知错误';
-      addMessage('assistant', `文件分析失败：${errMsg}。请确认文件格式和AI配置后重试。`);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  // 点击确认导入 - 弹出项目选择弹窗
-  const handleConfirmImportClick = (msgId: string, importData: ChatMessage['importData']) => {
-    if (!importData || !importData.items.length) return;
-    setImportModalData({ msgId, importData });
-    setSelectedProjectId(null);
-    setImportModalVisible(true);
-  };
-
-  // 确认导入数据
-  const handleConfirmImport = async () => {
-    if (!importModalData) return;
-    const { msgId, importData } = importModalData;
-    if (!importData || !importData.items.length) return;
-
-    // 岗位必须选项目
-    if (importData.type === 'position' && !selectedProjectId) {
-      message.warning('请选择所属项目');
-      return;
-    }
-
-    setImportModalVisible(false);
-    setImporting(true);
-
-    try {
-      if (importData.type === 'position') {
-        // 导入岗位 - 统一使用选中的项目
-        let success = 0;
-        let failed = 0;
-        for (const item of importData.items) {
-          try {
-            const payload = { ...item, projectId: selectedProjectId };
-            console.log('导入岗位数据:', JSON.stringify(payload));
-            await createPosition(payload);
-            success++;
-          } catch (err: any) {
-            console.error('导入岗位失败:', JSON.stringify(item), err?.response?.data || err?.message);
-            failed++;
-          }
-        }
-        updateMessage(msgId, {
-          content: `岗位导入完成！成功 ${success} 条${failed > 0 ? `，失败 ${failed} 条` : ''}`,
-          importData: undefined,
-        });
-        addMessage('system', `已成功导入 ${success} 个岗位到需求广场。`);
-      } else if (importData.type === 'candidate') {
-        // 导入候选人
-        let success = 0;
-        let failed = 0;
-        for (const item of importData.items) {
-          try {
-            const { positionId, ...candidateData } = item;
-            const candidateRes: any = await createCandidate(candidateData);
-            const candidateId = candidateRes.data?.id || candidateRes.id;
-
-            if (positionId && candidateId) {
-              await addCandidateToPosition(positionId, { candidateId });
-            }
-            success++;
-          } catch {
-            failed++;
-          }
-        }
-        updateMessage(msgId, {
-          content: `候选人导入完成！成功 ${success} 条${failed > 0 ? `，失败 ${failed} 条` : ''}`,
-          importData: undefined,
-        });
-        addMessage('system', `已成功导入 ${success} 位候选人。`);
-      }
-    } catch (err: any) {
-      message.error('导入失败：' + (err.message || '未知错误'));
-    } finally {
-      setImporting(false);
-      setImportModalData(null);
-    }
-  };
-
   const handleSend = async (text?: string) => {
     const content = text || inputValue.trim();
 
-    // 有附件文件时，走智能导入流程
+    // 有附件文件时，走文件分析流程
     if (attachedFile) {
-      handleAnalyzeFile();
+      const file = attachedFile;
+      const userMsg = content || `请分析这个文件`;
+      setAttachedFile(null);
+      setInputValue('');
+      addMessage('user', userMsg, file.name);
+      setSending(true);
+
+      try {
+        const res: any = await chatWithFile([{ role: 'user', content: userMsg }], file);
+        const aiContent = res.data?.content || res.data?.message || res.data || res.content || res.message || 'AI回复解析失败';
+        addMessage('assistant', typeof aiContent === 'string' ? aiContent : JSON.stringify(aiContent));
+      } catch (err: any) {
+        addMessage('assistant', '文件分析失败，请确认文件格式和AI配置后重试。');
+      } finally {
+        setSending(false);
+      }
       return;
     }
 
@@ -369,118 +214,6 @@ export default function AIAssistant() {
     e.target.value = '';
   };
 
-  // 更新导入数据中某个item的字段
-  const updateImportItem = (msgId: string, itemIndex: number, field: string, value: any) => {
-    setSessions((prev) =>
-      prev.map((s) => {
-        if (s.id !== activeSessionId) return s;
-        return {
-          ...s,
-          messages: s.messages.map((m) => {
-            if (m.id !== msgId || !m.importData) return m;
-            const newItems = [...m.importData.items];
-            newItems[itemIndex] = { ...newItems[itemIndex], [field]: value };
-            return { ...m, importData: { ...m.importData, items: newItems } };
-          }),
-        };
-      }),
-    );
-  };
-
-  // 删除导入数据中某个item
-  const removeImportItem = (msgId: string, itemIndex: number) => {
-    setSessions((prev) =>
-      prev.map((s) => {
-        if (s.id !== activeSessionId) return s;
-        return {
-          ...s,
-          messages: s.messages.map((m) => {
-            if (m.id !== msgId || !m.importData) return m;
-            const newItems = m.importData.items.filter((_, i) => i !== itemIndex);
-            return { ...m, importData: { ...m.importData, items: newItems } };
-          }),
-        };
-      }),
-    );
-  };
-
-  // 渲染导入预览
-  const renderImportPreview = (msg: ChatMessage) => {
-    if (!msg.importData) return null;
-    const { type, items, unmappedFields } = msg.importData;
-    if (!items || items.length === 0) return null;
-    const fieldLabels = type === 'position' ? POSITION_FIELD_LABELS : CANDIDATE_FIELD_LABELS;
-    const columns = Object.keys(items[0] || {})
-      .filter((key) => fieldLabels[key] && key !== 'projectId' && key !== 'positionId')
-      .map((key) => ({
-        title: fieldLabels[key] || key,
-        dataIndex: key,
-        width: 120,
-        render: (val: any, record: any) => (
-          <Input
-            value={val ?? ''}
-            onChange={(e) => updateImportItem(msg.id, record._key, key, e.target.value)}
-            size="small"
-            variant="borderless"
-            style={{ padding: 0 }}
-          />
-        ),
-      }));
-
-    // 添加操作列
-    columns.push({
-      title: '操作',
-      width: 60,
-      render: (_: any, record: any) => (
-        <Button
-          type="text"
-          size="small"
-          danger
-          icon={<DeleteOutlined />}
-          onClick={() => removeImportItem(msg.id, record._key)}
-        />
-      ),
-    });
-
-    const typeLabel = type === 'position' ? '岗位需求' : '候选人推荐';
-
-    return (
-      <div style={{ marginTop: 12, maxWidth: '100%', overflow: 'hidden' }}>
-        <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Tag color={type === 'position' ? 'blue' : 'green'}>{typeLabel} - {items.length}条</Tag>
-          {unmappedFields && Object.keys(unmappedFields).length > 0 && (
-            <Tooltip title={`未映射字段：${Object.entries(unmappedFields).map(([k, v]) => `${k}: ${v}`).join('、')}`}>
-              <Tag color="orange">有{Object.keys(unmappedFields).length}个未映射字段</Tag>
-            </Tooltip>
-          )}
-        </div>
-        <div style={{ maxWidth: '100%', overflow: 'auto' }}>
-          <Table
-            dataSource={items.map((item, idx) => ({ ...item, _key: idx }))}
-            rowKey="_key"
-            columns={columns}
-            size="small"
-            pagination={items.length > 5 ? { pageSize: 5 } : false}
-            scroll={{ x: columns.length * 120 }}
-            bordered
-            style={{ minWidth: 0 }}
-          />
-        </div>
-        <div style={{ marginTop: 12, textAlign: 'right' }}>
-          <Button
-            type="primary"
-            icon={<ImportOutlined />}
-            onClick={() => handleConfirmImportClick(msg.id, msg.importData!)}
-            loading={importing}
-            disabled={items.length === 0}
-          >
-            确认导入 {items.length} 条{typeLabel}
-          </Button>
-        </div>
-      </div>
-    );
-  };
-
   return (
     <div style={{ display: 'flex', height: 'calc(100vh - 148px)', gap: 0, overflow: 'hidden' }}>
       {/* 左侧对话历史 */}
@@ -543,8 +276,8 @@ export default function AIAssistant() {
               <div style={{ fontSize: 16, marginBottom: 8 }}>AI智能助手</div>
               <div style={{ fontSize: 13 }}>我可以帮您进行简历解析、岗位匹配、风险分析等操作</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>
-                <ImportOutlined style={{ marginRight: 4 }} />
-                上传岗位需求表或候选人推荐表，我可以智能识别并导入到系统中
+                <PaperClipOutlined style={{ marginRight: 4 }} />
+                上传文件，我可以帮您分析文件内容
               </div>
             </div>
           )}
@@ -581,7 +314,6 @@ export default function AIAssistant() {
                   boxSizing: 'border-box',
                 }}
               >
-                {msg.role === 'system' && <CheckCircleOutlined style={{ marginRight: 6 }} />}
                 {msg.fileName && (
                   <div style={{ marginBottom: 6, opacity: 0.8, fontSize: 12 }}>
                     <PaperClipOutlined style={{ marginRight: 4 }} />
@@ -589,7 +321,6 @@ export default function AIAssistant() {
                   </div>
                 )}
                 {msg.content}
-                {msg.importData && renderImportPreview(msg)}
               </div>
               {msg.role === 'user' && (
                 <Avatar
@@ -680,51 +411,22 @@ export default function AIAssistant() {
                   handleSend();
                 }
               }}
-              placeholder={attachedFile ? `添加导入指令（如"导入为岗位需求"），或直接发送自动识别` : '输入消息，按 Enter 发送，Shift+Enter 换行'}
+              placeholder={attachedFile ? '添加消息（如"请分析这个文件"），或直接发送' : '输入消息，按 Enter 发送，Shift+Enter 换行'}
               autoSize={{ minRows: 1, maxRows: 4 }}
               style={{ flex: 1 }}
             />
             <Button
               type="primary"
-              icon={attachedFile ? <ImportOutlined /> : <SendOutlined />}
+              icon={<SendOutlined />}
               onClick={() => handleSend()}
               loading={sending}
               style={{ alignSelf: 'flex-end', flexShrink: 0 }}
             >
-              {attachedFile ? '智能导入' : '发送'}
+              发送
             </Button>
           </div>
         </div>
       </Card>
-
-      {/* 导入项目选择弹窗 */}
-      <Modal
-        title="选择导入项目"
-        open={importModalVisible}
-        onOk={handleConfirmImport}
-        onCancel={() => { setImportModalVisible(false); setImportModalData(null); }}
-        okText="确认导入"
-        cancelText="取消"
-        okButtonProps={{ disabled: !selectedProjectId }}
-      >
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ marginBottom: 8 }}>
-            {importModalData?.importData?.type === 'position' ? '岗位需求' : '候选人推荐'}，
-            共 {importModalData?.importData?.items?.length || 0} 条数据
-          </div>
-          <div style={{ marginBottom: 8, fontWeight: 500 }}>请选择所属项目：</div>
-          <Select
-            value={selectedProjectId}
-            onChange={setSelectedProjectId}
-            placeholder="请选择项目"
-            style={{ width: '100%' }}
-            size="large"
-            options={projectList.map((p: any) => ({ value: p.id, label: p.name }))}
-            showSearch
-            optionFilterProp="label"
-          />
-        </div>
-      </Modal>
     </div>
   );
 }

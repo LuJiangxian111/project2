@@ -1,9 +1,11 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { User } from '../../entities/user.entity';
+
+const ADMIN_REGISTER_KEY = process.env.ADMIN_REGISTER_KEY || 'admin2024';
 
 @Injectable()
 export class AuthService {
@@ -51,12 +53,19 @@ export class AuthService {
     password: string,
     name: string,
     role: string,
+    adminKey?: string,
   ) {
     const existing = await this.userRepository.findOne({
       where: { username },
     });
     if (existing) {
       throw new ConflictException('用户名已存在');
+    }
+    // 注册管理员需要验证管理员密码
+    if (role === 'admin') {
+      if (!adminKey || adminKey !== ADMIN_REGISTER_KEY) {
+        throw new BadRequestException('管理员注册密码错误');
+      }
     }
     const hashedPassword = await bcrypt.hash(password, 10);
     const user = this.userRepository.create({
