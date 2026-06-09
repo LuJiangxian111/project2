@@ -17,6 +17,8 @@ import { Candidate } from './entities/candidate.entity';
 import { CandidatePosition } from './entities/candidate-position.entity';
 import { Interview } from './entities/interview.entity';
 import { AuditLog } from './entities/audit-log.entity';
+import { ApiKey } from './entities/api-key.entity';
+import { ApiKeyModule } from './modules/api-key/api-key.module';
 
 @Module({
   imports: [
@@ -38,6 +40,7 @@ import { AuditLog } from './entities/audit-log.entity';
         CandidatePosition,
         Interview,
         AuditLog,
+        ApiKey,
       ],
       synchronize: true,
       logging: process.env.NODE_ENV !== 'production',
@@ -51,6 +54,7 @@ import { AuditLog } from './entities/audit-log.entity';
     AiModule,
     LogModule,
     SocketModule,
+    ApiKeyModule,
   ],
 })
 export class AppModule {}

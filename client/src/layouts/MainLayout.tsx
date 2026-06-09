@@ -7,6 +7,7 @@ import {
   ShopOutlined,
   TeamOutlined,
   RobotOutlined,
+  KeyOutlined,
   SettingOutlined,
   UserOutlined,
   LogoutOutlined,
@@ -23,6 +24,7 @@ const menuItems = [
   { key: '/market', icon: <ShopOutlined />, label: '需求广场' },
   { key: '/candidates', icon: <TeamOutlined />, label: '候选人管理' },
   { key: '/ai', icon: <RobotOutlined />, label: 'AI助手' },
+  { key: '/api-keys', icon: <KeyOutlined />, label: 'API Key' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
 ];
 
@@ -32,6 +34,7 @@ const breadcrumbMap: Record<string, string> = {
   '/market': '需求广场',
   '/candidates': '候选人管理',
   '/ai': 'AI助手',
+  '/api-keys': 'API Key 管理',
   '/settings': '系统设置',
   '/profile': '个人信息',
 };

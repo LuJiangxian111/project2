@@ -491,6 +491,306 @@ ${fileContent}`;
     };
   }
 
+  async agentChat(messages: { role: string; content: string }[], userId: number) {
+    const { client, model } = await this.getClient(userId);
+
+    const tools = [
+      {
+        type: 'function' as const,
+        function: {
+          name: 'list_projects',
+          description: '获取项目列表',
+          parameters: {
+            type: 'object',
+            properties: {},
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'create_project',
+          description: '创建新项目',
+          parameters: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: '项目名称' },
+              description: { type: 'string', description: '项目描述' },
+              status: { type: 'string', enum: ['planning', 'active', 'completed', 'on-hold'], description: '项目状态' },
+            },
+            required: ['name'],
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'list_positions',
+          description: '获取岗位列表',
+          parameters: {
+            type: 'object',
+            properties: {
+              projectId: { type: 'number', description: '项目ID（可选）' },
+            },
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'create_position',
+          description: '创建新岗位需求',
+          parameters: {
+            type: 'object',
+            properties: {
+              systemName: { type: 'string', description: '系统名称' },
+              department: { type: 'string', description: '部门' },
+              positionDuty: { type: 'string', description: '岗位职务' },
+              positionType: { type: 'string', description: '岗位类型' },
+              techDomain: { type: 'string', description: '技术领域' },
+              urgency: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: '紧急程度' },
+              requiredCount: { type: 'number', description: '需求人数' },
+              region: { type: 'string', description: '地区' },
+              projectId: { type: 'number', description: '所属项目ID' },
+            },
+            required: ['systemName', 'department', 'positionDuty', 'projectId'],
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'list_candidates',
+          description: '获取候选人列表',
+          parameters: {
+            type: 'object',
+            properties: {},
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'create_candidate',
+          description: '添加新候选人',
+          parameters: {
+            type: 'object',
+            properties: {
+              name: { type: 'string', description: '姓名' },
+              gender: { type: 'string', description: '性别' },
+              phone: { type: 'string', description: '联系电话' },
+              email: { type: 'string', description: '邮箱' },
+              education: { type: 'string', description: '学历' },
+              domainYears: { type: 'string', description: '领域年限' },
+              workStatus: { type: 'string', description: '工作状态' },
+              expectedSalary: { type: 'string', description: '期望薪资' },
+              supplier: { type: 'string', description: '供应商' },
+            },
+            required: ['name'],
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'match_candidate',
+          description: '匹配候选人与岗位',
+          parameters: {
+            type: 'object',
+            properties: {
+              candidateId: { type: 'number', description: '候选人ID' },
+              positionId: { type: 'number', description: '岗位ID' },
+            },
+            required: ['candidateId', 'positionId'],
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'analyze_risk',
+          description: '分析招聘风险',
+          parameters: {
+            type: 'object',
+            properties: {},
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'generate_report',
+          description: '生成招聘报告',
+          parameters: {
+            type: 'object',
+            properties: {
+              type: { type: 'string', enum: ['position', 'project'], description: '报告类型' },
+              positionId: { type: 'number', description: '岗位ID（type为position时必填）' },
+              projectId: { type: 'number', description: '项目ID（type为project时必填）' },
+            },
+            required: ['type'],
+          },
+        },
+      },
+    ];
+
+    const systemMessage = {
+      role: 'system' as const,
+      content: `你是一个智能招聘助手，可以帮助用户管理项目、岗位需求和候选人。你可以通过调用工具来执行操作。
+当用户要求执行操作时，请调用相应的工具。操作完成后，用中文向用户汇报结果。
+如果用户提供的参数不完整，请主动询问缺失的信息。`,
+    };
+
+    const allMessages = [systemMessage, ...messages] as any[];
+
+    let response = await client.chat.completions.create({
+      model,
+      messages: allMessages,
+      tools,
+      tool_choice: 'auto',
+      temperature: 0.5,
+    });
+
+    let assistantMessage = response.choices[0]?.message;
+    let finalContent = assistantMessage?.content || '';
+
+    while (assistantMessage?.tool_calls && assistantMessage.tool_calls.length > 0) {
+      allMessages.push(assistantMessage);
+
+      for (const toolCall of assistantMessage.tool_calls) {
+        const functionName = toolCall.function.name;
+        let functionResult: any;
+
+        try {
+          const args = JSON.parse(toolCall.function.arguments);
+          functionResult = await this.executeToolCall(functionName, args, userId);
+        } catch (err: any) {
+          functionResult = { error: err.message || '执行失败' };
+        }
+
+        allMessages.push({
+          role: 'tool' as const,
+          tool_call_id: toolCall.id,
+          content: JSON.stringify(functionResult),
+        });
+      }
+
+      response = await client.chat.completions.create({
+        model,
+        messages: allMessages,
+        tools,
+        tool_choice: 'auto',
+        temperature: 0.5,
+      });
+
+      assistantMessage = response.choices[0]?.message;
+      if (assistantMessage?.content) {
+        finalContent = assistantMessage.content;
+      }
+    }
+
+    await this.logService.log(userId, 'agent_chat', 'ai', null, {
+      model,
+      messageCount: messages.length,
+    });
+
+    return {
+      content: finalContent,
+      model: response.model,
+      usage: response.usage,
+    };
+  }
+
+  private async executeToolCall(functionName: string, args: any, userId: number): Promise<any> {
+    switch (functionName) {
+      case 'list_projects': {
+        const projects = await this.projectRepository.find({ order: { createdAt: 'DESC' } });
+        return projects.map(p => ({ id: p.id, name: p.name, status: p.status, description: p.description }));
+      }
+      case 'create_project': {
+        const project = this.projectRepository.create({
+          name: args.name,
+          description: args.description || '',
+          status: args.status || 'planning',
+          managerId: userId,
+        });
+        const result = await this.projectRepository.save(project);
+        return { id: result.id, name: result.name, status: result.status, message: '项目创建成功' };
+      }
+      case 'list_positions': {
+        const where: any = {};
+        if (args.projectId) where.projectId = args.projectId;
+        const positions = await this.positionRepository.find({ where, order: { createdAt: 'DESC' } });
+        return positions.map(p => ({
+          id: p.id, systemName: p.systemName, positionDuty: p.positionDuty,
+          department: p.department, urgency: p.urgency, status: p.status,
+          requiredCount: p.requiredCount, hiredCount: p.hiredCount,
+        }));
+      }
+      case 'create_position': {
+        const position = this.positionRepository.create({
+          systemName: args.systemName,
+          department: args.department,
+          positionDuty: args.positionDuty,
+          positionType: args.positionType || '未指定',
+          techDomain: args.techDomain || '未指定',
+          majorType: '未指定',
+          levelDistribution: '未指定',
+          urgency: args.urgency || 'medium',
+          requiredCount: args.requiredCount || 1,
+          region: args.region || '未指定',
+          deliveryForm: '未指定',
+          requirements: '待补充',
+          responsibilities: '待补充',
+          domainExperience: '待补充',
+          requirementNumber: `REQ-${Date.now()}`,
+          projectId: args.projectId,
+          creatorId: userId,
+        });
+        const result = await this.positionRepository.save(position);
+        return { id: result.id, positionDuty: result.positionDuty, message: '岗位创建成功' };
+      }
+      case 'list_candidates': {
+        const candidates = await this.candidateRepository.find({ order: { createdAt: 'DESC' } });
+        return candidates.map(c => ({
+          id: c.id, name: c.name, gender: c.gender, education: c.education,
+          domainYears: c.domainYears, workStatus: c.workStatus, expectedSalary: c.expectedSalary,
+        }));
+      }
+      case 'create_candidate': {
+        const candidate = this.candidateRepository.create({
+          name: args.name,
+          gender: args.gender || '未提供',
+          contactPhone: args.phone || '',
+          contactEmail: args.email || '',
+          education: args.education || '未提供',
+          domainYears: args.domainYears || '未提供',
+          workStatus: args.workStatus || '未提供',
+          expectedSalary: args.expectedSalary || '未提供',
+          supplier: args.supplier || '未提供',
+          idType: '身份证',
+          educationType: '统招',
+        });
+        const result = await this.candidateRepository.save(candidate);
+        return { id: result.id, name: result.name, message: '候选人添加成功' };
+      }
+      case 'match_candidate': {
+        return this.matchCandidate({ id: args.candidateId } as any, { id: args.positionId } as any, userId);
+      }
+      case 'analyze_risk': {
+        return this.analyzeRisk({}, userId);
+      }
+      case 'generate_report': {
+        const params: any = {};
+        if (args.type === 'position') params.positionId = args.positionId;
+        if (args.type === 'project') params.projectId = args.projectId;
+        return this.generateReport(args.type, params, userId);
+      }
+      default:
+        return { error: `未知函数: ${functionName}` };
+    }
+  }
+
   async importFile(fileContent: string, fileType: string, userId: number) {
     const { client, model } = await this.getClient(userId);
 

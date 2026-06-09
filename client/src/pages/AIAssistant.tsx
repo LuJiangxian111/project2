@@ -16,7 +16,7 @@ import {
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons';
-import { chatWithAI, chatWithFile } from '../api/ai';
+import { chatWithAI, chatWithFile, agentChatWithAI } from '../api/ai';
 
 const { Paragraph } = Typography;
 
@@ -151,7 +151,7 @@ export default function AIAssistant() {
     setSending(true);
 
     try {
-      const res: any = await chatWithAI(content);
+      const res: any = await agentChatWithAI(content);
       const aiContent = res.data?.content || res.data?.message || res.data || res.content || res.message || 'AI回复解析失败';
       addMessage('assistant', typeof aiContent === 'string' ? aiContent : JSON.stringify(aiContent));
     } catch (err: any) {

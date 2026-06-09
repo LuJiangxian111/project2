@@ -32,6 +32,9 @@ export const generateReport = (type: string, projectId: number, startDate?: stri
 export const analyzeRisk = (positionId?: number, projectId?: number) =>
   request.post('/ai/analyze-risk', { positionId, projectId });
 
+export const agentChatWithAI = (message: string) =>
+  request.post('/ai/agent-chat', { message });
+
 export const importFile = (file: File) => {
   const formData = new FormData();
   formData.append('file', file);

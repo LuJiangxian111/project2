@@ -109,6 +109,22 @@ export class AiController {
     return this.aiService.chat(messages, user.id);
   }
 
+  @Post('agent-chat')
+  async agentChat(
+    @Body() body: { message?: string; messages?: { role: string; content: string }[] },
+    @CurrentUser() user: any,
+  ) {
+    let messages: { role: string; content: string }[];
+    if (body.messages && Array.isArray(body.messages)) {
+      messages = body.messages;
+    } else if (body.message) {
+      messages = [{ role: 'user', content: body.message }];
+    } else {
+      messages = [];
+    }
+    return this.aiService.agentChat(messages, user.id);
+  }
+
   @Post('analyze-file')
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024 } }))
   async analyzeFile(

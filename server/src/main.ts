@@ -20,7 +20,7 @@ async function bootstrap() {
       : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://0.0.0.0:5173'],
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'x-api-key'],
   });
 
   app.useGlobalPipes(
