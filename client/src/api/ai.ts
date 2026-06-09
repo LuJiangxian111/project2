@@ -32,8 +32,15 @@ export const generateReport = (type: string, projectId: number, startDate?: stri
 export const analyzeRisk = (positionId?: number, projectId?: number) =>
   request.post('/ai/analyze-risk', { positionId, projectId });
 
-export const agentChatWithAI = (message: string) =>
-  request.post('/ai/agent-chat', { message });
+export const agentChatWithAI = (messages: { role: string; content: string }[]) =>
+  request.post('/ai/agent-chat', { messages });
+
+export const agentChatWithFile = (file: File, messages: { role: string; content: string }[]) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('messages', JSON.stringify(messages));
+  return request.post('/ai/agent-chat-with-file', formData, { timeout: 180000 });
+};
 
 export const importFile = (file: File) => {
   const formData = new FormData();

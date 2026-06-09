@@ -6,11 +6,13 @@ import { User } from '../../entities/user.entity';
 import { Position } from '../../entities/position.entity';
 import { Candidate } from '../../entities/candidate.entity';
 import { Project } from '../../entities/project.entity';
+import { CandidatePosition } from '../../entities/candidate-position.entity';
+import { Interview } from '../../entities/interview.entity';
 import { LogModule } from '../log/log.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Position, Candidate, Project]),
+    TypeOrmModule.forFeature([User, Position, Candidate, Project, CandidatePosition, Interview]),
     LogModule,
   ],
   controllers: [AiController],

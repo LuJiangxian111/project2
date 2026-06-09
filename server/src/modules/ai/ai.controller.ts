@@ -196,6 +196,48 @@ export class AiController {
     return this.aiService.chatWithFile(messages, fileContent, fileName, user.id);
   }
 
+  @Post('agent-chat-with-file')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 50 * 1024 * 1024 } }))
+  async agentChatWithFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Body() body: { messages?: string },
+    @CurrentUser() user: any,
+  ) {
+    let messages: { role: string; content: string }[] = [];
+    try {
+      messages = body.messages ? JSON.parse(body.messages) : [];
+    } catch { /* ignore */ }
+
+    // Parse file content
+    let fileContent = '';
+    let fileName = '';
+    if (file) {
+      fileName = Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8');
+      if (file.buffer) {
+        const ext = (file.originalname || '').split('.').pop()?.toLowerCase();
+        if (ext === 'xlsx' || ext === 'xls') {
+          const XLSX = require('xlsx');
+          const workbook = XLSX.read(file.buffer, { type: 'buffer', codepage: 65001 });
+          const sheetName = workbook.SheetNames[0];
+          const sheet = workbook.Sheets[sheetName];
+          const jsonData: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+          fileContent = jsonData.map(row => row.join(',')).join('\n');
+        } else {
+          fileContent = file.buffer.toString('utf-8');
+        }
+      }
+      // Add file info to the last user message or create a new one
+      const fileInfoMsg = `用户上传了文件"${fileName}"，文件内容如下：\n${fileContent.substring(0, 30000)}\n\n请根据文件内容和用户的要求执行操作。`;
+      if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+        messages[messages.length - 1].content += '\n\n' + fileInfoMsg;
+      } else {
+        messages.push({ role: 'user', content: fileInfoMsg });
+      }
+    }
+
+    return this.aiService.agentChat(messages, user.id);
+  }
+
   @Post('parse-resume')
   @UseInterceptors(
     FileInterceptor('file', {

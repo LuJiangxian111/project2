@@ -15,8 +15,9 @@ import {
   DeleteOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  DownloadOutlined,
 } from '@ant-design/icons';
-import { chatWithAI, chatWithFile, agentChatWithAI } from '../api/ai';
+import { chatWithAI, chatWithFile, agentChatWithAI, agentChatWithFile } from '../api/ai';
 
 const { Paragraph } = Typography;
 
@@ -26,6 +27,7 @@ interface ChatMessage {
   content: string;
   timestamp: Date;
   fileName?: string;
+  csvData?: string;  // 用于导出CSV数据
 }
 
 interface ChatSession {
@@ -102,13 +104,14 @@ export default function AIAssistant() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeSession?.messages]);
 
-  const addMessage = (role: 'user' | 'assistant' | 'system', content: string, fileName?: string) => {
+  const addMessage = (role: 'user' | 'assistant' | 'system', content: string, fileName?: string, csvData?: string) => {
     const msg: ChatMessage = {
       id: Date.now().toString(),
       role,
       content,
       timestamp: new Date(),
       fileName,
+      csvData,
     };
     setSessions((prev) =>
       prev.map((s) => {
@@ -134,9 +137,22 @@ export default function AIAssistant() {
       setSending(true);
 
       try {
-        const res: any = await chatWithFile(file, [{ role: 'user', content: userMsg }]);
+        const historyMessages = [
+          ...(activeSession?.messages || []).map((m) => ({
+            role: m.role as 'user' | 'assistant',
+            content: m.content,
+          })),
+          { role: 'user' as const, content: userMsg },
+        ];
+        const res: any = await agentChatWithFile(file, historyMessages);
         const aiContent = res.data?.content || res.data?.message || res.data || res.content || res.message || 'AI回复解析失败';
-        addMessage('assistant', typeof aiContent === 'string' ? aiContent : JSON.stringify(aiContent));
+        // 检查是否包含CSV数据
+        const csvMatch = typeof aiContent === 'string' ? aiContent.match(/```csv\n([\s\S]*?)```/) : null;
+        if (csvMatch) {
+          addMessage('assistant', aiContent, undefined, csvMatch[1]);
+        } else {
+          addMessage('assistant', typeof aiContent === 'string' ? aiContent : JSON.stringify(aiContent));
+        }
       } catch (err: any) {
         addMessage('assistant', '文件分析失败，请确认文件格式和AI配置后重试。');
       } finally {
@@ -151,9 +167,23 @@ export default function AIAssistant() {
     setSending(true);
 
     try {
-      const res: any = await agentChatWithAI(content);
+      // 构建包含历史对话的消息列表
+      const historyMessages = [
+        ...(activeSession?.messages || []).map((m) => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        })),
+        { role: 'user' as const, content },
+      ];
+      const res: any = await agentChatWithAI(historyMessages);
       const aiContent = res.data?.content || res.data?.message || res.data || res.content || res.message || 'AI回复解析失败';
-      addMessage('assistant', typeof aiContent === 'string' ? aiContent : JSON.stringify(aiContent));
+      // 检查是否包含CSV数据
+      const csvMatch = typeof aiContent === 'string' ? aiContent.match(/```csv\n([\s\S]*?)```/) : null;
+      if (csvMatch) {
+        addMessage('assistant', aiContent, undefined, csvMatch[1]);
+      } else {
+        addMessage('assistant', typeof aiContent === 'string' ? aiContent : JSON.stringify(aiContent));
+      }
     } catch (err: any) {
       addMessage('assistant', '抱歉，AI服务暂时不可用，请稍后重试。');
     } finally {
@@ -321,6 +351,25 @@ export default function AIAssistant() {
                   </div>
                 )}
                 {msg.content}
+                {msg.csvData && (
+                  <div style={{ marginTop: 8 }}>
+                    <Button
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => {
+                        const blob = new Blob(['\uFEFF' + msg.csvData], { type: 'text/csv;charset=utf-8' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `export_${Date.now()}.csv`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      下载CSV文件
+                    </Button>
+                  </div>
+                )}
               </div>
               {msg.role === 'user' && (
                 <Avatar
