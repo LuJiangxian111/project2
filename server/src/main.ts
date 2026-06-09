@@ -15,8 +15,12 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
 
   app.enableCors({
-    origin: ['http://localhost:5173'],
+    origin: process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(',')
+      : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://0.0.0.0:5173'],
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
   });
 
   app.useGlobalPipes(
@@ -32,7 +36,8 @@ async function bootstrap() {
   app.use('/uploads', express.static(join(__dirname, '..', 'uploads')));
 
   const port = process.env.PORT || 3000;
-  await app.listen(port);
-  console.log(`Application is running on: http://localhost:${port}/api`);
+  const host = process.env.HOST || '0.0.0.0';
+  await app.listen(port, host);
+  console.log(`Application is running on: http://${host}:${port}/api`);
 }
 bootstrap();

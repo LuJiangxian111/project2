@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project } from '../../entities/project.entity';
 import { LogService } from '../log/log.service';
+import { SocketGateway } from '../socket/socket.gateway';
 
 @Injectable()
 export class ProjectService {
@@ -10,6 +11,7 @@ export class ProjectService {
     @InjectRepository(Project)
     private projectRepository: Repository<Project>,
     private logService: LogService,
+    private socketGateway: SocketGateway,
   ) {}
 
   async findAll(query?: {
@@ -59,6 +61,7 @@ export class ProjectService {
     await this.logService.log(userId, 'create', 'project', result.id, {
       name: result.name,
     });
+    this.socketGateway.broadcastToAllUsers('project.created', result);
     return result;
   }
 
@@ -70,6 +73,7 @@ export class ProjectService {
     Object.assign(project, data);
     const result = await this.projectRepository.save(project);
     await this.logService.log(userId, 'update', 'project', id, data);
+    this.socketGateway.broadcastToAllUsers('project.updated', result);
     return result;
   }
 
@@ -82,6 +86,7 @@ export class ProjectService {
     await this.logService.log(userId, 'delete', 'project', id, {
       name: project.name,
     });
+    this.socketGateway.broadcastToAllUsers('project.deleted', { id });
     return { message: '删除成功' };
   }
 

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
@@ -8,6 +9,7 @@ import { CandidateModule } from './modules/candidate/candidate.module';
 import { InterviewModule } from './modules/interview/interview.module';
 import { AiModule } from './modules/ai/ai.module';
 import { LogModule } from './modules/log/log.module';
+import { SocketModule } from './modules/socket/socket.module';
 import { User } from './entities/user.entity';
 import { Project } from './entities/project.entity';
 import { Position } from './entities/position.entity';
@@ -15,21 +17,19 @@ import { Candidate } from './entities/candidate.entity';
 import { CandidatePosition } from './entities/candidate-position.entity';
 import { Interview } from './entities/interview.entity';
 import { AuditLog } from './entities/audit-log.entity';
-import * as path from 'path';
-import * as fs from 'fs';
-
-const dbPath = path.join(__dirname, '..', 'data', 'app.db');
-const dbDir = path.dirname(dbPath);
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
-}
 
 @Module({
   imports: [
+    ConfigModule.forRoot({
+      isGlobal: true,
+    }),
     TypeOrmModule.forRoot({
-      type: 'sqljs',
-      location: dbPath,
-      autoSave: true,
+      type: process.env.DB_TYPE === 'mysql' ? 'mysql' : 'sqlite',
+      host: process.env.DB_TYPE === 'mysql' ? process.env.DB_HOST : undefined,
+      port: process.env.DB_TYPE === 'mysql' ? parseInt(process.env.DB_PORT || '3306') : undefined,
+      username: process.env.DB_TYPE === 'mysql' ? process.env.DB_USERNAME : undefined,
+      password: process.env.DB_TYPE === 'mysql' ? process.env.DB_PASSWORD : undefined,
+      database: process.env.DB_TYPE === 'mysql' ? process.env.DB_DATABASE : ':memory:',
       entities: [
         User,
         Project,
@@ -40,6 +40,7 @@ if (!fs.existsSync(dbDir)) {
         AuditLog,
       ],
       synchronize: true,
+      logging: process.env.NODE_ENV !== 'production',
     }),
     AuthModule,
     UserModule,
@@ -49,6 +50,7 @@ if (!fs.existsSync(dbDir)) {
     InterviewModule,
     AiModule,
     LogModule,
+    SocketModule,
   ],
 })
 export class AppModule {}

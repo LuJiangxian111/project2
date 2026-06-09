@@ -6,6 +6,7 @@ import { CandidatePosition } from '../../entities/candidate-position.entity';
 import { Position } from '../../entities/position.entity';
 import { LogService } from '../log/log.service';
 import { AiService } from '../ai/ai.service';
+import { SocketGateway } from '../socket/socket.gateway';
 
 @Injectable()
 export class CandidateService {
@@ -18,6 +19,7 @@ export class CandidateService {
     private positionRepository: Repository<Position>,
     private logService: LogService,
     private aiService: AiService,
+    private socketGateway: SocketGateway,
   ) {}
 
   async findAll(query?: { keyword?: string; source?: string }) {
@@ -37,10 +39,6 @@ export class CandidateService {
     return qb.getMany();
   }
 
-  /**
-   * 查询所有候选人-岗位关联，支持按项目/岗位筛选
-   * 返回按人分组的数据（同名同电话归为一组）
-   */
   async findAllWithPositions(query?: {
     keyword?: string;
     projectId?: number;
@@ -77,7 +75,6 @@ export class CandidateService {
 
     const results = await qb.getMany();
 
-    // 按同名同电话分组
     const groupMap = new Map<string, any[]>();
     for (const cp of results) {
       const key = `${cp.candidate.name}||${cp.candidate.contactPhone || ''}`;
@@ -87,7 +84,6 @@ export class CandidateService {
       groupMap.get(key)!.push(cp);
     }
 
-    // 转换为分组结构
     const groups = Array.from(groupMap.entries()).map(([key, items]) => {
       const [name, phone] = key.split('||');
       const firstCandidate = items[0]?.candidate;
@@ -96,7 +92,6 @@ export class CandidateService {
         name,
         phone: phone || undefined,
         candidateIds,
-        // 候选人基本信息
         idType: firstCandidate?.idType,
         idNumber: firstCandidate?.idNumber,
         gender: firstCandidate?.gender,
@@ -137,9 +132,6 @@ export class CandidateService {
     return groups;
   }
 
-  /**
-   * 更新候选人在某岗位的状态
-   */
   async updateCandidatePositionStatus(
     cpId: number,
     status: string,
@@ -156,7 +148,6 @@ export class CandidateService {
     cp.status = status as any;
     const result = await this.candidatePositionRepository.save(cp);
 
-    // 状态变为已入职时，岗位已录用人数+1；从已入职变为其他状态时，岗位已录用人数-1
     if (status === 'onboarded' && oldStatus !== 'onboarded' && cp.position) {
       const pos = await this.positionRepository.findOneBy({ id: cp.position.id });
       if (pos) {
@@ -176,6 +167,7 @@ export class CandidateService {
       positionTitle: cp.position?.positionDuty,
       newStatus: status,
     });
+    this.socketGateway.broadcastToAllUsers('candidate.statusUpdated', { cpId, status, candidateName: cp.candidate?.name });
     return result;
   }
 
@@ -188,7 +180,6 @@ export class CandidateService {
       throw new NotFoundException('候选人不存在');
     }
 
-    // 按同名同电话查找该候选人在其他记录下的关联岗位
     const samePersonCandidates = await this.candidateRepository.find({
       where: [
         { name: candidate.name, contactPhone: candidate.contactPhone || '' },
@@ -196,7 +187,6 @@ export class CandidateService {
       relations: ['candidatePositions', 'candidatePositions.position', 'candidatePositions.position.project'],
     });
 
-    // 合并所有同名同电话候选人的关联岗位
     const allPositions: any[] = [];
     const seenCpIds = new Set<number>();
     for (const c of samePersonCandidates) {
@@ -220,6 +210,7 @@ export class CandidateService {
     await this.logService.log(userId, 'create', 'candidate', result.id, {
       name: result.name,
     });
+    this.socketGateway.broadcastToAllUsers('candidate.created', result);
     return result;
   }
 
@@ -231,6 +222,7 @@ export class CandidateService {
     Object.assign(candidate, data);
     const result = await this.candidateRepository.save(candidate);
     await this.logService.log(userId, 'update', 'candidate', id, data);
+    this.socketGateway.broadcastToAllUsers('candidate.updated', result);
     return result;
   }
 
@@ -243,6 +235,7 @@ export class CandidateService {
     await this.logService.log(userId, 'delete', 'candidate', id, {
       name: candidate.name,
     });
+    this.socketGateway.broadcastToAllUsers('candidate.deleted', { id, name: candidate.name });
     return { message: '删除成功' };
   }
 
@@ -295,6 +288,8 @@ export class CandidateService {
       positionId,
       score: matchResult.score,
     });
+
+    this.socketGateway.broadcastToAllUsers('candidate.matched', { candidateId, positionId, score: matchResult.score });
 
     return {
       candidate,

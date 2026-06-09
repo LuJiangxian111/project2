@@ -56,13 +56,10 @@ export default function MainLayout() {
   }, [token, user, setUser]);
 
   const pathSnippets = location.pathname.split('/').filter((i) => i);
-  const breadcrumbItems = [
-    { title: '首页' },
-    ...pathSnippets.map((_, index) => {
+  const breadcrumbItems = pathSnippets.map((_, index) => {
       const url = `/${pathSnippets.slice(0, index + 1).join('/')}`;
       return { title: breadcrumbMap[url] || pathSnippets[index], path: url };
-    }),
-  ];
+    });
 
   const selectedKey = '/' + (pathSnippets[0] || '');
   const dropdownItems = [
@@ -158,13 +155,9 @@ export default function MainLayout() {
               {collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
             </span>
             <Breadcrumb
-              items={breadcrumbItems.map((item) => ({
-                title: item.path ? (
-                  <a onClick={() => navigate(item.path!)}>{item.title}</a>
-                ) : (
-                  item.title
-                ),
-              }))}
+              items={[{ title: <a onClick={() => navigate('/')}>首页</a> }, ...breadcrumbItems.map((item) => ({
+                title: <a onClick={() => navigate(item.path)}>{item.title}</a>,
+              }))]}
             />
           </div>
           <Dropdown menu={{ items: dropdownItems, onClick: handleDropdownClick }} placement="bottomRight">

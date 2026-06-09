@@ -70,7 +70,7 @@ function loadSessions(): { sessions: ChatSession[]; activeId: string } {
   } catch {
     try { localStorage.removeItem(CHAT_STORAGE_KEY); localStorage.removeItem(ACTIVE_SESSION_KEY); } catch { /* ignore */ }
   }
-  const defaultSession = { id: '1', title: '新对话', messages: [], createdAt: new Date().toISOString() };
+  const defaultSession = { id: '1', title: '新对话', messages: [], createdAt: new Date() };
   return { sessions: [defaultSession], activeId: '1' };
 }
 
@@ -134,7 +134,7 @@ export default function AIAssistant() {
       setSending(true);
 
       try {
-        const res: any = await chatWithFile([{ role: 'user', content: userMsg }], file);
+        const res: any = await chatWithFile(file, [{ role: 'user', content: userMsg }]);
         const aiContent = res.data?.content || res.data?.message || res.data || res.content || res.message || 'AI回复解析失败';
         addMessage('assistant', typeof aiContent === 'string' ? aiContent : JSON.stringify(aiContent));
       } catch (err: any) {
@@ -188,7 +188,7 @@ export default function AIAssistant() {
     setSessions((prev) => {
       const filtered = prev.filter((s) => s.id !== sessionId);
       if (filtered.length === 0) {
-        const newSession = { id: Date.now().toString(), title: '新对话', messages: [], createdAt: new Date().toISOString() };
+        const newSession: ChatSession = { id: Date.now().toString(), title: '新对话', messages: [], createdAt: new Date() };
         setActiveSessionId(newSession.id);
         return [newSession];
       }

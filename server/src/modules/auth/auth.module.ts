@@ -13,7 +13,7 @@ import { User } from '../../entities/user.entity';
     PassportModule.register({ defaultStrategy: 'jwt' }),
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'ai-position-square-jwt-secret-2024',
-      signOptions: { expiresIn: '7d' },
+      signOptions: { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
     }),
   ],
   controllers: [AuthController],

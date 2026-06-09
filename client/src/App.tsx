@@ -1,6 +1,7 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { useEffect } from 'react';
 import { useUserStore } from './stores/user';
+import { initSocket, disconnectSocket } from './socket';
 import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
@@ -22,10 +23,21 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   const loadUser = useUserStore((s) => s.loadUser);
+  const user = useUserStore((s) => s.user);
 
   useEffect(() => {
     loadUser();
   }, []);
+
+  useEffect(() => {
+    if (user?.id) {
+      initSocket();
+    }
+
+    return () => {
+      disconnectSocket();
+    };
+  }, [user?.id]);
 
   return (
     <Routes>

@@ -1,0 +1,109 @@
+# Sealos 部署配置
+# 使用前请替换以下占位符：
+# <YOUR_SEALOS_USERNAME> - 你的 Sealos 用户名
+# <YOUR_DB_HOST> - Sealos MySQL 数据库地址
+# <YOUR_DB_PASSWORD> - 数据库密码
+# <YOUR_JWT_SECRET> - JWT 密钥（至少32位）
+# <YOUR_DOMAIN> - 你的域名
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-position-backend
+  labels:
+    app: ai-position-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-position-backend
+  template:
+    metadata:
+      labels:
+        app: ai-position-backend
+    spec:
+      containers:
+      - name: backend
+        image: cloud.sealos.io/<YOUR_SEALOS_USERNAME>/ai-position-backend:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: DB_TYPE
+          value: "mysql"
+        - name: DB_HOST
+          value: "<YOUR_DB_HOST>"
+        - name: DB_PORT
+          value: "3306"
+        - name: DB_USERNAME
+          value: "root"
+        - name: DB_PASSWORD
+          value: "<YOUR_DB_PASSWORD>"
+        - name: DB_DATABASE
+          value: "ai_position_square"
+        - name: JWT_SECRET
+          value: "<YOUR_JWT_SECRET>"
+        - name: CORS_ORIGIN
+          value: "*"
+        - name: HOST
+          value: "0.0.0.0"
+        - name: PORT
+          value: "3000"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-position-backend-service
+spec:
+  selector:
+    app: ai-position-backend
+  ports:
+  - port: 80
+    targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-position-frontend
+  labels:
+    app: ai-position-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ai-position-frontend
+  template:
+    metadata:
+      labels:
+        app: ai-position-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: cloud.sealos.io/<YOUR_SEALOS_USERNAME>/ai-position-frontend:latest
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ai-position-frontend-service
+spec:
+  selector:
+    app: ai-position-frontend
+  ports:
+  - port: 80
+    targetPort: 80

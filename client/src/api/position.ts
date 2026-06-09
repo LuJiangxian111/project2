@@ -65,7 +65,7 @@ export const createPosition = (data: CreatePositionParams) => request.post('/pos
 export const getPosition = (id: number) => request.get(`/positions/${id}`);
 export const updatePosition = (id: number, data: Partial<CreatePositionParams>) => request.put(`/positions/${id}`, data);
 export const deletePosition = (id: number) => request.delete(`/positions/${id}`);
-export const addCandidateToPosition = (positionId: number, data: { candidateId: number }) =>
+export const addCandidateToPosition = (positionId: number, data: { candidateId: number; recommender?: string; recommendReason?: string }) =>
   request.post(`/positions/${positionId}/candidates`, data);
 export const getPositionCandidates = (positionId: number) => request.get(`/positions/${positionId}/candidates`);
 export const batchImportCandidates = (positionId: number, items: any[]) =>

@@ -7,12 +7,14 @@ import { CandidatePosition } from '../../entities/candidate-position.entity';
 import { Position } from '../../entities/position.entity';
 import { LogModule } from '../log/log.module';
 import { AiModule } from '../ai/ai.module';
+import { SocketModule } from '../socket/socket.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Candidate, CandidatePosition, Position]),
     LogModule,
     AiModule,
+    SocketModule,
   ],
   controllers: [CandidateController],
   providers: [CandidateService],

@@ -8,12 +8,14 @@ import { CandidatePosition } from '../../entities/candidate-position.entity';
 import { Candidate } from '../../entities/candidate.entity';
 import { LogModule } from '../log/log.module';
 import { AiModule } from '../ai/ai.module';
+import { SocketModule } from '../socket/socket.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([Position, CandidatePosition, Candidate]),
     LogModule,
     AiModule,
+    SocketModule,
   ],
   controllers: [PositionController],
   providers: [PositionService, CandidateService],
