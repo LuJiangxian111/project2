@@ -64,7 +64,7 @@ export default function MainLayout() {
   const loadNotices = async () => {
     try {
       setNoticeLoading(true);
-      const res: any = await getNotices();
+      const res: any = await getNotices(user?.id);
       const data = res.data || res || [];
       data.sort((a: any, b: any) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
       setNotices(data);
@@ -81,10 +81,12 @@ export default function MainLayout() {
   };
 
   useEffect(() => {
-    loadNotices();
-    const timer = setInterval(loadNotices, 30000); // 每30秒轮询
-    return () => clearInterval(timer);
-  }, []);
+    if (user?.id) {
+      loadNotices();
+      const timer = setInterval(loadNotices, 30000); // 每30秒轮询
+      return () => clearInterval(timer);
+    }
+  }, [user?.id]);
 
   const handleNoticeOpenChange = (open: boolean) => {
     setNoticeOpen(open);

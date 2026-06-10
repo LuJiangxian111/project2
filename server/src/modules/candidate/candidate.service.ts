@@ -7,6 +7,19 @@ import { Position } from '../../entities/position.entity';
 import { LogService } from '../log/log.service';
 import { AiService } from '../ai/ai.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { NoticeService } from '../notice/notice.service';
+
+const STATUS_LABELS: Record<string, string> = {
+  pending_screen: '待筛选',
+  screen_rejected: '筛选不通过',
+  screen_passed: '筛选通过待约面',
+  pending_interview: '待面试',
+  interview_passed: '面试通过',
+  interview_rejected: '面试不通过',
+  abandoned: '放弃面试',
+  pending_onboard: '待入职',
+  onboarded: '已入职',
+};
 
 @Injectable()
 export class CandidateService {
@@ -20,6 +33,7 @@ export class CandidateService {
     private logService: LogService,
     private aiService: AiService,
     private socketGateway: SocketGateway,
+    private noticeService: NoticeService,
   ) {}
 
   async findAll(query?: { keyword?: string; source?: string }) {
@@ -168,6 +182,20 @@ export class CandidateService {
       newStatus: status,
     });
     this.socketGateway.broadcastToAllUsers('candidate.statusUpdated', { cpId, status, candidateName: cp.candidate?.name });
+
+    // 通知候选人上传者（推荐人）
+    if (cp.recommenderId) {
+      const candidateName = cp.candidate?.name || '未知';
+      const positionName = cp.position?.positionDuty || '未知岗位';
+      const oldLabel = STATUS_LABELS[oldStatus] || oldStatus;
+      const newLabel = STATUS_LABELS[status] || status;
+      this.noticeService.createSystemNotice(
+        '候选人状态变更',
+        `您推荐的候选人「${candidateName}」在岗位「${positionName}」的状态已从「${oldLabel}」变更为「${newLabel}」`,
+        cp.recommenderId,
+      ).catch(() => {});
+    }
+
     return result;
   }
 

@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Put, Delete, Param, Body, UseGuards, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Param, Body, Query, UseGuards, ParseIntPipe } from '@nestjs/common';
 import { NoticeService } from './notice.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -8,8 +8,8 @@ export class NoticeController {
   constructor(private noticeService: NoticeService) {}
 
   @Get()
-  async findAll() {
-    return this.noticeService.findAll();
+  async findAll(@Query('userId') userId?: string) {
+    return this.noticeService.findAll(userId ? Number(userId) : undefined);
   }
 
   @Get(':id')

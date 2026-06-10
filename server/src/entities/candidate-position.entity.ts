@@ -68,6 +68,9 @@ export class CandidatePosition {
   @Column({ name: 'recommender', length: 100, nullable: true })
   recommender: string;
 
+  @Column({ name: 'recommender_id', nullable: true })
+  recommenderId: number;
+
   @Column({ name: 'push_date', type: 'date', nullable: true })
   pushDate: Date;
 

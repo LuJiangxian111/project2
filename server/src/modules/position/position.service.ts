@@ -6,6 +6,7 @@ import { CandidatePosition } from '../../entities/candidate-position.entity';
 import { Candidate } from '../../entities/candidate.entity';
 import { LogService } from '../log/log.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { NoticeService } from '../notice/notice.service';
 
 @Injectable()
 export class PositionService {
@@ -18,6 +19,7 @@ export class PositionService {
     private candidateRepository: Repository<Candidate>,
     private logService: LogService,
     private socketGateway: SocketGateway,
+    private noticeService: NoticeService,
   ) {}
 
   async findAll(query?: {
@@ -316,6 +318,7 @@ export class PositionService {
       recommendedAt: new Date(),
       pushDate: new Date(),
       recommender: candidateData.recommender || '',
+      recommenderId: userId,
       recommendReason: candidateData.recommendReason || '',
       implementation: positionWithImpl?.positionImplementation || '',
     });
@@ -325,6 +328,16 @@ export class PositionService {
       candidateName: candidate.name,
     });
     this.socketGateway.broadcastToAllUsers('candidate.added', { positionId, candidateId: candidate.id, candidateName: candidate.name });
+
+    // 通知岗位上传者
+    if (position.creatorId && position.creatorId !== userId) {
+      this.noticeService.createSystemNotice(
+        '新候选人推荐',
+        `${candidateData.recommender || '有人'}向您的岗位「${position.positionDuty}」推荐了候选人「${candidate.name}」`,
+        position.creatorId,
+      ).catch(() => {});
+    }
+
     return result;
   }
 

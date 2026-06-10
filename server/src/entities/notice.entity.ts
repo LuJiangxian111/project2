@@ -19,6 +19,13 @@ export class Notice {
   @JoinColumn({ name: 'author_id' })
   author: User;
 
+  @Column({ name: 'target_user_id', nullable: true })
+  targetUserId: number;
+
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'target_user_id' })
+  targetUser: User;
+
   @Column({ default: true })
   active: boolean;
 

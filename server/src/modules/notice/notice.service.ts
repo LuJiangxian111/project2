@@ -10,7 +10,18 @@ export class NoticeService {
     private noticeRepository: Repository<Notice>,
   ) {}
 
-  async findAll() {
+  async findAll(userId?: number) {
+    if (userId) {
+      // 返回广播通知 + 定向给该用户的通知
+      return this.noticeRepository.find({
+        where: [
+          { targetUserId: null },
+          { targetUserId: userId },
+        ],
+        relations: ['author'],
+        order: { createdAt: 'DESC' },
+      });
+    }
     return this.noticeRepository.find({ relations: ['author'], order: { createdAt: 'DESC' } });
   }
 
@@ -20,6 +31,16 @@ export class NoticeService {
 
   async create(data: Partial<Notice>, userId: number) {
     const notice = this.noticeRepository.create({ ...data, authorId: userId });
+    return this.noticeRepository.save(notice);
+  }
+
+  async createSystemNotice(title: string, content: string, targetUserId?: number) {
+    const notice = this.noticeRepository.create({
+      title,
+      content,
+      authorId: 1, // 系统用户
+      targetUserId: targetUserId || null,
+    });
     return this.noticeRepository.save(notice);
   }
 

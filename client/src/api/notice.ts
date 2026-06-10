@@ -1,6 +1,7 @@
 import request from './request';
 
-export const getNotices = () => request.get('/notices');
+export const getNotices = (userId?: number) =>
+  request.get('/notices', { params: userId ? { userId } : {} });
 
 export const createNotice = (data: { title: string; content: string }) =>
   request.post('/notices', data);

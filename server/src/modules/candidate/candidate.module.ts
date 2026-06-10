@@ -8,6 +8,7 @@ import { Position } from '../../entities/position.entity';
 import { LogModule } from '../log/log.module';
 import { AiModule } from '../ai/ai.module';
 import { SocketModule } from '../socket/socket.module';
+import { NoticeModule } from '../notice/notice.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { SocketModule } from '../socket/socket.module';
     LogModule,
     AiModule,
     SocketModule,
+    NoticeModule,
   ],
   controllers: [CandidateController],
   providers: [CandidateService],
