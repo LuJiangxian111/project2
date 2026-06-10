@@ -17,7 +17,7 @@ import {
   MenuUnfoldOutlined,
   DownloadOutlined,
 } from '@ant-design/icons';
-import { chatWithAI, chatWithFile, agentChatWithAI, agentChatWithFile } from '../api/ai';
+import { chatWithAI, chatWithFile, agentChatWithAI, agentChatWithFile, agentChatWithFiles } from '../api/ai';
 
 const { Paragraph } = Typography;
 
@@ -89,7 +89,7 @@ export default function AIAssistant() {
   const [inputValue, setInputValue] = useState('');
   const [sending, setSending] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [attachedFile, setAttachedFile] = useState<File | null>(null);
+  const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -128,12 +128,12 @@ export default function AIAssistant() {
     const content = text || inputValue.trim();
 
     // 有附件文件时，走文件分析流程
-    if (attachedFile) {
-      const file = attachedFile;
-      const userMsg = content || `请分析这个文件`;
-      setAttachedFile(null);
+    if (attachedFiles.length > 0) {
+      const files = attachedFiles;
+      const userMsg = content || `请分析这些文件`;
+      setAttachedFiles([]);
       setInputValue('');
-      addMessage('user', userMsg, file.name);
+      addMessage('user', userMsg, files.map(f => f.name).join(', '));
       setSending(true);
 
       try {
@@ -144,9 +144,8 @@ export default function AIAssistant() {
           })),
           { role: 'user' as const, content: userMsg },
         ];
-        const res: any = await agentChatWithFile(file, historyMessages);
+        const res: any = await agentChatWithFiles(files, historyMessages);
         const aiContent = res.data?.content || res.data?.message || res.data || res.content || res.message || 'AI回复解析失败';
-        // 检查是否包含CSV数据
         const csvMatch = typeof aiContent === 'string' ? aiContent.match(/```csv\n([\s\S]*?)```/) : null;
         if (csvMatch) {
           addMessage('assistant', aiContent, undefined, csvMatch[1]);
@@ -167,7 +166,6 @@ export default function AIAssistant() {
     setSending(true);
 
     try {
-      // 构建包含历史对话的消息列表
       const historyMessages = [
         ...(activeSession?.messages || []).map((m) => ({
           role: m.role as 'user' | 'assistant',
@@ -177,7 +175,6 @@ export default function AIAssistant() {
       ];
       const res: any = await agentChatWithAI(historyMessages);
       const aiContent = res.data?.content || res.data?.message || res.data || res.content || res.message || 'AI回复解析失败';
-      // 检查是否包含CSV数据
       const csvMatch = typeof aiContent === 'string' ? aiContent.match(/```csv\n([\s\S]*?)```/) : null;
       if (csvMatch) {
         addMessage('assistant', aiContent, undefined, csvMatch[1]);
@@ -210,7 +207,7 @@ export default function AIAssistant() {
     };
     setSessions((prev) => [newSession, ...prev]);
     setActiveSessionId(newSession.id);
-    setAttachedFile(null);
+    setAttachedFiles([]);
   };
 
   const handleDeleteSession = (sessionId: string, e?: any) => {
@@ -234,13 +231,20 @@ export default function AIAssistant() {
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 10 * 1024 * 1024) {
-      message.error('文件大小不能超过10MB');
+    const fileList = e.target.files;
+    if (!fileList || fileList.length === 0) return;
+    const newFiles = Array.from(fileList);
+    // 检查总文件大小
+    const totalSize = [...attachedFiles, ...newFiles].reduce((sum, f) => sum + f.size, 0);
+    if (totalSize > 50 * 1024 * 1024) {
+      message.error('所有文件总大小不能超过50MB');
       return;
     }
-    setAttachedFile(file);
+    if (attachedFiles.length + newFiles.length > 10) {
+      message.error('最多上传10个文件');
+      return;
+    }
+    setAttachedFiles(prev => [...prev, ...newFiles]);
     e.target.value = '';
   };
 
@@ -262,7 +266,7 @@ export default function AIAssistant() {
             dataSource={sessions}
             renderItem={(session) => (
               <List.Item
-                onClick={() => { setActiveSessionId(session.id); setAttachedFile(null); }}
+                onClick={() => { setActiveSessionId(session.id); setAttachedFiles([]); }}
                 style={{
                   padding: '8px 12px',
                   cursor: 'pointer',
@@ -307,7 +311,7 @@ export default function AIAssistant() {
               <div style={{ fontSize: 13 }}>我可以帮您进行简历解析、岗位匹配、风险分析等操作</div>
               <div style={{ fontSize: 13, marginTop: 4 }}>
                 <PaperClipOutlined style={{ marginRight: 4 }} />
-                上传文件，我可以帮您分析文件内容
+                支持上传多个文件，我可以帮您分析文件内容
               </div>
             </div>
           )}
@@ -383,7 +387,7 @@ export default function AIAssistant() {
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
               <Avatar icon={<RobotOutlined />} style={{ backgroundColor: '#1890ff', marginRight: 8 }} />
               <Spin size="small" />
-              <span style={{ marginLeft: 8, color: '#999' }}>AI正在{attachedFile ? '分析文件' : '思考'}...</span>
+              <span style={{ marginLeft: 8, color: '#999' }}>AI正在{attachedFiles.length > 0 ? '分析文件' : '思考'}...</span>
             </div>
           )}
           <div ref={messagesEndRef} />
@@ -408,32 +412,31 @@ export default function AIAssistant() {
 
         {/* 输入区 */}
         <div style={{ padding: 16, borderTop: '1px solid #f0f0f0' }}>
-          {attachedFile && (
-            <div style={{
-              marginBottom: 8,
-              padding: '6px 12px',
-              background: '#f6f6f6',
-              borderRadius: 6,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
-              <Space>
-                <PaperClipOutlined style={{ color: '#1890ff' }} />
-                <span style={{ fontSize: 13 }}>{attachedFile.name}</span>
-                <Tag style={{ fontSize: 11 }}>
-                  {attachedFile.size > 1024 * 1024
-                    ? `${(attachedFile.size / 1024 / 1024).toFixed(1)}MB`
-                    : `${(attachedFile.size / 1024).toFixed(1)}KB`}
-                </Tag>
-              </Space>
-              <Button
-                type="text"
-                size="small"
-                icon={<CloseCircleOutlined />}
-                onClick={() => setAttachedFile(null)}
-                danger
-              />
+          {attachedFiles.length > 0 && (
+            <div style={{ marginBottom: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {attachedFiles.map((file, index) => (
+                <div key={index} style={{
+                  padding: '4px 10px',
+                  background: '#f6f6f6',
+                  borderRadius: 6,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 13,
+                }}>
+                  <PaperClipOutlined style={{ color: '#1890ff' }} />
+                  <span>{file.name}</span>
+                  <Tag style={{ fontSize: 11, margin: 0 }}>
+                    {file.size > 1024 * 1024
+                      ? `${(file.size / 1024 / 1024).toFixed(1)}MB`
+                      : `${(file.size / 1024).toFixed(1)}KB`}
+                  </Tag>
+                  <CloseCircleOutlined
+                    style={{ color: '#ff4d4f', cursor: 'pointer' }}
+                    onClick={() => setAttachedFiles(prev => prev.filter((_, i) => i !== index))}
+                  />
+                </div>
+              ))}
             </div>
           )}
 
@@ -442,6 +445,7 @@ export default function AIAssistant() {
               ref={fileInputRef}
               type="file"
               accept={ACCEPTED_FILE_TYPES}
+              multiple
               style={{ display: 'none' }}
               onChange={handleFileChange}
             />
@@ -460,7 +464,7 @@ export default function AIAssistant() {
                   handleSend();
                 }
               }}
-              placeholder={attachedFile ? '添加消息（如"请分析这个文件"），或直接发送' : '输入消息，按 Enter 发送，Shift+Enter 换行'}
+              placeholder={attachedFiles.length > 0 ? '添加消息（如"请分析这些文件"），或直接发送' : '输入消息，按 Enter 发送，Shift+Enter 换行'}
               autoSize={{ minRows: 1, maxRows: 4 }}
               style={{ flex: 1 }}
             />

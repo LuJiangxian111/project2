@@ -35,11 +35,15 @@ export const analyzeRisk = (positionId?: number, projectId?: number) =>
 export const agentChatWithAI = (messages: { role: string; content: string }[]) =>
   request.post('/ai/agent-chat', { messages });
 
-export const agentChatWithFile = (file: File, messages: { role: string; content: string }[]) => {
+export const agentChatWithFiles = (files: File[], messages: { role: string; content: string }[]) => {
   const formData = new FormData();
-  formData.append('file', file);
+  files.forEach(file => formData.append('files', file));
   formData.append('messages', JSON.stringify(messages));
   return request.post('/ai/agent-chat-with-file', formData, { timeout: 180000 });
+};
+
+export const agentChatWithFile = (file: File, messages: { role: string; content: string }[]) => {
+  return agentChatWithFiles([file], messages);
 };
 
 export const importFile = (file: File) => {

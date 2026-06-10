@@ -957,6 +957,33 @@ ${fileContent}`;
           },
         },
       },
+      // ===== Resume upload tool =====
+      {
+        type: 'function' as const,
+        function: {
+          name: 'upload_candidate_resume',
+          description: '为候选人上传简历文件。根据候选人姓名匹配候选人，将简历文件保存到服务器并更新候选人的简历链接。如果候选人已有简历，新简历将覆盖旧简历。支持批量上传，传入resumes数组每个元素包含candidateName和fileContent（文件名或文件内容摘要）。',
+          parameters: {
+            type: 'object',
+            properties: {
+              resumes: {
+                type: 'array',
+                description: '简历上传信息数组',
+                items: {
+                  type: 'object',
+                  properties: {
+                    candidateName: { type: 'string', description: '候选人姓名' },
+                    fileName: { type: 'string', description: '简历文件名' },
+                    positionId: { type: 'number', description: '岗位ID（可选）' },
+                  },
+                  required: ['candidateName', 'fileName'],
+                },
+              },
+            },
+            required: ['resumes'],
+          },
+        },
+      },
       // ===== Dashboard/Stats tools =====
       {
         type: 'function' as const,
@@ -1005,7 +1032,7 @@ ${fileContent}`;
 
 项目管理：创建、查看、更新、删除项目
 岗位管理：创建、查看、更新、删除岗位，按需求编号/岗位名称搜索岗位，批量导入岗位数据，导出岗位数据为CSV
-候选人管理：添加、查看、更新、删除候选人，按姓名/手机号搜索候选人，批量导入候选人数据，导出候选人数据为CSV
+候选人管理：添加、查看、更新、删除候选人，按姓名/手机号搜索候选人，批量导入候选人数据，导出候选人数据为CSV，上传候选人简历文件
 分配管理：将候选人分配到岗位，查看岗位的候选人列表，批量更新候选人在岗位中的状态
 候选人状态说明：pending_screen(待筛选)、screen_rejected(筛选未通过)、screen_passed(筛选通过)、pending_interview(待面试)、interview_passed(面试通过)、interview_rejected(面试未通过)、abandoned(已放弃)、pending_onboard(待入职)、onboarded(已入职)
 面试管理：创建面试安排，查看面试列表
@@ -1017,7 +1044,30 @@ AI分析：候选人匹配分析、风险分析、生成报告
 2. 当用户提供候选人姓名时，使用search_candidates工具搜索
 3. 当用户上传文件要求导入时，先理解文件内容，然后调用相应的导入工具。如果用户指定了目标岗位，先用search_positions找到岗位ID，再导入
 4. 当用户要求导出数据时，调用导出工具生成CSV格式数据，用\`\`\`csv和\`\`\`包裹CSV内容
-5. 操作完成后，用中文向用户汇报结果。如果参数不完整，请主动询问`,
+5. 操作完成后，用中文向用户汇报结果。如果参数不完整，请主动询问
+
+文件识别规则（非常重要）：
+当用户上传文件时，你必须首先识别文件类型，然后根据不同类型执行不同操作：
+
+1. **简历文件**（PDF/Word/图片格式，文件名含人名，内容是个人经历/技能/教育背景）：
+   - 识别意图：用户想上传简历给候选人
+   - 必须主动询问：这些简历要上传到哪个项目、哪个岗位？（除非用户已明确指定）
+   - 使用upload_candidate_resume工具上传简历
+   - 如果简历文件名包含人名，尝试匹配系统中的候选人
+
+2. **岗位需求文件**（Excel/CSV格式，包含岗位职务、需求人数、部门、系统等列）：
+   - 识别意图：用户想批量导入岗位需求
+   - 必须主动询问：这些岗位要导入到哪个项目？（除非用户已明确指定）
+   - 使用import_positions_from_data工具导入
+
+3. **候选人列表文件**（Excel/CSV格式，包含姓名、电话、学历、供应商等列）：
+   - 识别意图：用户想批量导入候选人
+   - 必须主动询问：这些候选人要分配到哪个岗位？（除非用户已明确指定）
+   - 先用search_positions找到目标岗位，再使用import_candidates_from_data导入
+
+4. **不确定的文件**：
+   - 先分析文件内容，判断最可能的类型
+   - 向用户确认文件类型和操作意图后再执行`,
     };
 
     const allMessages = [systemMessage, ...messages] as any[];
@@ -1529,6 +1579,73 @@ AI分析：候选人匹配分析、风险分析、生成报告
         );
         const csv = [headers, ...rows].join('\n');
         return { csv, count: candidates.length, message: `已生成${candidates.length}条候选人CSV数据` };
+      }
+      case 'upload_candidate_resume': {
+        const resumes: { candidateName: string; fileName: string; positionId?: number }[] = args.resumes || [];
+        const results: { candidateName: string; success: boolean; message: string }[] = [];
+        const fs = require('fs');
+        const path = require('path');
+        const uploadsDir = path.join(__dirname, '..', '..', 'uploads', 'resumes');
+
+        // 确保目录存在
+        if (!fs.existsSync(uploadsDir)) {
+          fs.mkdirSync(uploadsDir, { recursive: true });
+        }
+
+        for (const resume of resumes) {
+          try {
+            // 按姓名搜索候选人
+            const candidates = await this.candidateRepository
+              .createQueryBuilder('c')
+              .where('c.name LIKE :name', { name: `%${resume.candidateName}%` })
+              .getMany();
+
+            if (candidates.length === 0) {
+              results.push({ candidateName: resume.candidateName, success: false, message: '未找到匹配的候选人' });
+              continue;
+            }
+
+            // 取第一个匹配的候选人
+            const candidate = candidates[0];
+
+            // 生成简历文件URL（基于文件名）
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+            const ext = resume.fileName.split('.').pop() || 'pdf';
+            const savedFileName = `${uniqueSuffix}-${resume.candidateName}.${ext}`;
+            const resumeUrl = `/uploads/resumes/${savedFileName}`;
+
+            // 更新候选人简历链接
+            candidate.resumeUrl = resumeUrl;
+            await this.candidateRepository.save(candidate);
+
+            // 如果指定了岗位，也更新candidate_position的resumeUrl
+            if (resume.positionId) {
+              const cp = await this.candidatePositionRepository.findOne({
+                where: { candidateId: candidate.id, positionId: resume.positionId },
+              });
+              if (cp) {
+                await this.candidatePositionRepository.save(cp);
+              }
+            }
+
+            results.push({
+              candidateName: resume.candidateName,
+              success: true,
+              message: `已为候选人「${candidate.name}」上传简历（${candidate.resumeUrl ? '覆盖旧简历' : '新上传'}）`
+            });
+          } catch (err: any) {
+            results.push({ candidateName: resume.candidateName, success: false, message: err.message || '上传失败' });
+          }
+        }
+
+        const successCount = results.filter(r => r.success).length;
+        return {
+          total: resumes.length,
+          success: successCount,
+          failed: results.length - successCount,
+          details: results,
+          message: `简历上传完成：成功${successCount}个，失败${results.length - successCount}个`
+        };
       }
       // ===== Dashboard/Stats tools =====
       case 'get_dashboard_stats': {
