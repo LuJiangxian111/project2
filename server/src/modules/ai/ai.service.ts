@@ -125,7 +125,8 @@ ${fileContent}`;
 工作状态: ${candidate.workStatus || '未提供'}
 期望薪资: ${candidate.expectedSalary || '未提供'}
 供应商: ${candidate.supplier || '未提供'}
-简历摘要: ${candidate.resumeText || '未提供'}`;
+简历链接: ${candidate.resumeUrl || '未提供'}
+简历内容: ${candidate.resumeText || '未提供'}`;
 
     const positionInfo = `
 岗位职务: ${position.positionDuty}
@@ -143,13 +144,14 @@ ${fileContent}`;
 交付形式: ${position.deliveryForm}
 紧急程度: ${position.urgency}`;
 
-    const prompt = `请分析以下候选人与岗位的匹配度，返回JSON格式：
+    const prompt = `请分析以下候选人与岗位的匹配度，重点结合候选人简历内容与岗位任职要求进行深入分析，返回JSON格式：
 {
   "score": 匹配分数(0-100的整数),
   "detail": {
     "skillMatch": 技能匹配分析,
     "experienceMatch": 经验匹配分析,
     "educationMatch": 学历匹配分析,
+    "resumeAnalysis": 简历内容与岗位要求的匹配分析,
     "overallAnalysis": 综合分析,
     "strengths": ["优势1", "优势2"],
     "weaknesses": ["不足1", "不足2"],
@@ -856,13 +858,29 @@ ${fileContent}`;
         type: 'function' as const,
         function: {
           name: 'list_position_candidates',
-          description: '获取岗位的候选人列表',
+          description: '获取岗位的候选人列表，包含候选人姓名和当前状态',
           parameters: {
             type: 'object',
             properties: {
               positionId: { type: 'number', description: '岗位ID' },
             },
             required: ['positionId'],
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
+          name: 'update_candidate_status',
+          description: '更新候选人在岗位中的状态。状态可选值：pending_screen(待筛选)、screen_rejected(筛选未通过)、screen_passed(筛选通过)、pending_interview(待面试)、interview_passed(面试通过)、interview_rejected(面试未通过)、abandoned(已放弃)、pending_onboard(待入职)、onboarded(已入职)。支持批量更新，传入candidateIds数组可同时更新多个候选人。',
+          parameters: {
+            type: 'object',
+            properties: {
+              candidateIds: { type: 'array', items: { type: 'number' }, description: '候选人ID数组，支持批量' },
+              positionId: { type: 'number', description: '岗位ID' },
+              status: { type: 'string', description: '新状态，如：interview_passed、screen_rejected、onboarded等' },
+            },
+            required: ['candidateIds', 'positionId', 'status'],
           },
         },
       },
@@ -933,6 +951,7 @@ ${fileContent}`;
           parameters: {
             type: 'object',
             properties: {
+              projectId: { type: 'number', description: '项目ID（可选，筛选指定项目的候选人）' },
               positionId: { type: 'number', description: '岗位ID（可选，筛选指定岗位的候选人）' },
             },
           },
@@ -987,7 +1006,8 @@ ${fileContent}`;
 项目管理：创建、查看、更新、删除项目
 岗位管理：创建、查看、更新、删除岗位，按需求编号/岗位名称搜索岗位，批量导入岗位数据，导出岗位数据为CSV
 候选人管理：添加、查看、更新、删除候选人，按姓名/手机号搜索候选人，批量导入候选人数据，导出候选人数据为CSV
-分配管理：将候选人分配到岗位，查看岗位的候选人列表
+分配管理：将候选人分配到岗位，查看岗位的候选人列表，批量更新候选人在岗位中的状态
+候选人状态说明：pending_screen(待筛选)、screen_rejected(筛选未通过)、screen_passed(筛选通过)、pending_interview(待面试)、interview_passed(面试通过)、interview_rejected(面试未通过)、abandoned(已放弃)、pending_onboard(待入职)、onboarded(已入职)
 面试管理：创建面试安排，查看面试列表
 AI分析：候选人匹配分析、风险分析、生成报告
 数据统计：查看仪表盘统计数据
@@ -1386,8 +1406,39 @@ AI分析：候选人匹配分析、风险分析、生成报告
           recommendReason: cp.recommendReason,
         }));
       }
+      case 'update_candidate_status': {
+        const validStatuses = ['pending_screen', 'screen_rejected', 'screen_passed', 'pending_interview', 'interview_passed', 'interview_rejected', 'abandoned', 'pending_onboard', 'onboarded'];
+        if (!validStatuses.includes(args.status)) {
+          return { error: `无效的状态值，可选值：${validStatuses.join(', ')}` };
+        }
+        const candidateIds: number[] = args.candidateIds;
+        const results: { candidateId: number; success: boolean; message: string }[] = [];
+        for (const cid of candidateIds) {
+          const cp = await this.candidatePositionRepository.findOne({
+            where: { candidateId: cid, positionId: args.positionId },
+            relations: ['candidate'],
+          });
+          if (!cp) {
+            results.push({ candidateId: cid, success: false, message: '未找到该候选人在此岗位的记录' });
+            continue;
+          }
+          const oldStatus = cp.status;
+          cp.status = args.status;
+          await this.candidatePositionRepository.save(cp);
+          results.push({
+            candidateId: cid,
+            success: true,
+            message: `${cp.candidate?.name || '候选人'}：${oldStatus} → ${args.status}`,
+          });
+        }
+        return { updated: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, details: results };
+      }
       case 'match_candidate': {
-        return this.matchCandidate({ id: args.candidateId } as any, { id: args.positionId } as any, userId);
+        const candidate = await this.candidateRepository.findOne({ where: { id: args.candidateId } });
+        const position = await this.positionRepository.findOne({ where: { id: args.positionId } });
+        if (!candidate) return { error: '候选人不存在' };
+        if (!position) return { error: '岗位不存在' };
+        return this.matchCandidate(candidate, position, userId);
       }
       // ===== Interview tools =====
       case 'list_interviews': {
@@ -1446,18 +1497,35 @@ AI分析：候选人匹配分析、风险分析、生成报告
       }
       case 'export_candidates_csv': {
         let candidates: Candidate[];
+        let statusMap: Record<number, string> = {};
         if (args.positionId) {
           const cps = await this.candidatePositionRepository.find({
             where: { positionId: args.positionId },
             relations: ['candidate'],
           });
           candidates = cps.map(cp => cp.candidate).filter(Boolean);
+          for (const cp of cps) {
+            if (cp.candidateId) statusMap[cp.candidateId] = cp.status;
+          }
+        } else if (args.projectId) {
+          const positions = await this.positionRepository.find({
+            where: { projectId: args.projectId },
+          });
+          const positionIds = positions.map(p => p.id);
+          const cps = await this.candidatePositionRepository.find({
+            where: positionIds.map(pid => ({ positionId: pid })),
+            relations: ['candidate'],
+          });
+          candidates = cps.map(cp => cp.candidate).filter(Boolean);
+          for (const cp of cps) {
+            if (cp.candidateId) statusMap[cp.candidateId] = cp.status;
+          }
         } else {
           candidates = await this.candidateRepository.find();
         }
-        const headers = 'ID,姓名,性别,学历,领域年限,工作状态,期望薪资,供应商,联系电话,邮箱';
+        const headers = 'ID,姓名,性别,学历,领域年限,工作状态,期望薪资,供应商,联系电话,邮箱,简历链接,状态';
         const rows = candidates.map(c =>
-          `${c.id},${c.name},${c.gender || ''},${c.education || ''},${c.domainYears || ''},${c.workStatus || ''},${c.expectedSalary || ''},${c.supplier || ''},${c.contactPhone || ''},${c.contactEmail || ''}`
+          `${c.id},${c.name},${c.gender || ''},${c.education || ''},${c.domainYears || ''},${c.workStatus || ''},${c.expectedSalary || ''},${c.supplier || ''},${c.contactPhone || ''},${c.contactEmail || ''},${c.resumeUrl || ''},${statusMap[c.id] || ''}`
         );
         const csv = [headers, ...rows].join('\n');
         return { csv, count: candidates.length, message: `已生成${candidates.length}条候选人CSV数据` };

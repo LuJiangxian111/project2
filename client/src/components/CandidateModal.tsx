@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Modal, Form, Input, Select, Row, Col, Upload, message } from 'antd';
-import { UploadOutlined } from '@ant-design/icons';
+import { Modal, Form, Input, Select, Row, Col, Upload, message, Button, Space } from 'antd';
+import { UploadOutlined, LinkOutlined, DeleteOutlined, FilePdfOutlined } from '@ant-design/icons';
 import { createCandidate } from '../api/candidate';
 import { addCandidateToPosition } from '../api/position';
 import { useUserStore } from '../stores/user';
+import request from '../api/request';
 
 interface CandidateModalProps {
   open: boolean;
@@ -15,21 +16,53 @@ interface CandidateModalProps {
 export default function CandidateModal({ open, onClose, onSuccess, positionId }: CandidateModalProps) {
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [resumeMode, setResumeMode] = useState<'link' | 'upload'>('link');
+  const [uploadedFile, setUploadedFile] = useState<{ url: string; name: string } | null>(null);
+  const [uploading, setUploading] = useState(false);
   const user = useUserStore((s) => s.user);
 
   useEffect(() => {
     if (open) {
       form.resetFields();
+      setUploadedFile(null);
+      setResumeMode('link');
       form.setFieldsValue({
         recommender: user?.name || user?.username || '',
       });
     }
   }, [open, form, user]);
 
+  const handleUploadResume = async (file: File) => {
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res: any = await request.post('/candidates/upload-resume', formData);
+      if (res.data?.url) {
+        setUploadedFile({ url: res.data.url, name: res.data.fileName || file.name });
+        form.setFieldsValue({ resumeUrl: res.data.url });
+        message.success('简历上传成功');
+      }
+    } catch {
+      message.error('简历上传失败');
+    } finally {
+      setUploading(false);
+    }
+    return false; // 阻止自动上传
+  };
+
+  const handleRemoveResume = () => {
+    setUploadedFile(null);
+    form.setFieldsValue({ resumeUrl: undefined });
+  };
+
   const handleSubmit = async () => {
     try {
       const values = await form.validateFields();
       setLoading(true);
+      if (!values.pushDate) {
+        values.pushDate = new Date().toISOString().split('T')[0];
+      }
       // 创建候选人
       const candRes: any = await createCandidate(values);
       const candidate = candRes.data || candRes;
@@ -43,6 +76,7 @@ export default function CandidateModal({ open, onClose, onSuccess, positionId }:
       }
       message.success('候选人添加成功');
       form.resetFields();
+      setUploadedFile(null);
       onSuccess?.();
       onClose();
     } catch (err: any) {
@@ -177,7 +211,61 @@ export default function CandidateModal({ open, onClose, onSuccess, positionId }:
           </Col>
           <Col span={12}>
             <Form.Item name="resumeUrl" label="简历附件">
-              <Input placeholder="简历链接或上传后自动填充" />
+              <Space direction="vertical" style={{ width: '100%' }}>
+                <Space>
+                  <Button
+                    size="small"
+                    type={resumeMode === 'link' ? 'primary' : 'default'}
+                    icon={<LinkOutlined />}
+                    onClick={() => setResumeMode('link')}
+                  >
+                    填写链接
+                  </Button>
+                  <Button
+                    size="small"
+                    type={resumeMode === 'upload' ? 'primary' : 'default'}
+                    icon={<UploadOutlined />}
+                    onClick={() => setResumeMode('upload')}
+                  >
+                    上传文件
+                  </Button>
+                </Space>
+                {resumeMode === 'link' ? (
+                  <Input
+                    placeholder="请输入简历链接地址"
+                    onChange={(e) => {
+                      if (uploadedFile) {
+                        setUploadedFile(null);
+                      }
+                    }}
+                  />
+                ) : (
+                  <>
+                    {uploadedFile ? (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 8px', background: '#f5f5f5', borderRadius: 4 }}>
+                        <FilePdfOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />
+                        <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {uploadedFile.name}
+                        </span>
+                        <Button size="small" type="link" danger icon={<DeleteOutlined />} onClick={handleRemoveResume} />
+                      </div>
+                    ) : (
+                      <Upload
+                        accept=".pdf,.doc,.docx"
+                        showUploadList={false}
+                        beforeUpload={(file) => {
+                          handleUploadResume(file);
+                          return false;
+                        }}
+                      >
+                        <Button icon={<UploadOutlined />} loading={uploading}>
+                          {uploading ? '上传中...' : '选择简历文件（PDF/Word）'}
+                        </Button>
+                      </Upload>
+                    )}
+                  </>
+                )}
+              </Space>
             </Form.Item>
           </Col>
         </Row>

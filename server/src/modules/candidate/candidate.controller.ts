@@ -7,9 +7,18 @@ import {
   Param,
   Body,
   Query,
+  Res,
   UseGuards,
   ParseIntPipe,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { join } from 'path';
+import { Response } from 'express';
+import { ZipArchive } from 'archiver';
+import * as fs from 'fs';
 import { CandidateService } from './candidate.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -79,5 +88,72 @@ export class CandidateController {
     @CurrentUser() user: any,
   ) {
     return this.candidateService.matchWithPosition(id, positionId, user.id);
+  }
+
+  @Post('upload-resume')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', 'uploads', 'resumes'),
+      filename: (_req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = file.originalname.split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  }))
+  async uploadResume(@UploadedFile() file: Express.Multer.File) {
+    if (!file) return { code: 1, message: '请选择文件' };
+    const url = `/uploads/resumes/${file.filename}`;
+    const originalName = Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8');
+    return { code: 0, message: '上传成功', data: { url, fileName: originalName } };
+  }
+
+  @Get('export-resumes')
+  async exportResumes(
+    @Query('projectId') projectId?: string,
+    @Query('positionId') positionId?: string,
+    @Res() res?: Response,
+  ) {
+    // 查询有简历的候选人
+    const candidates = await this.candidateService.findCandidatesWithResume(
+      projectId ? Number(projectId) : undefined,
+      positionId ? Number(positionId) : undefined,
+    );
+
+    if (candidates.length === 0) {
+      res.status(404).json({ message: '没有找到有简历的候选人' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=resumes_${Date.now()}.zip`);
+
+    const archive = new ZipArchive({ zlib: { level: 5 } });
+    archive.pipe(res);
+
+    const uploadsDir = join(__dirname, '..', '..', 'uploads');
+    let addedCount = 0;
+
+    for (const candidate of candidates) {
+      const resumeUrl = candidate.resumeUrl;
+      if (!resumeUrl) continue;
+
+      // resumeUrl 格式: /uploads/resumes/xxx.pdf
+      const filePath = join(uploadsDir, resumeUrl.replace('/uploads/', ''));
+      if (fs.existsSync(filePath)) {
+        const ext = filePath.split('.').pop();
+        const fileName = `${candidate.name}_${candidate.id}.${ext}`;
+        archive.file(filePath, { name: fileName });
+        addedCount++;
+      }
+    }
+
+    if (addedCount === 0) {
+      res.status(404).json({ message: '简历文件不存在' });
+      return;
+    }
+
+    archive.finalize();
   }
 }

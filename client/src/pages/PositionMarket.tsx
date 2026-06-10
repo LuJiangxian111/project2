@@ -169,7 +169,10 @@ export default function PositionMarket() {
     try {
       setImporting(true);
       const res: any = await batchImportPositions({
-        items: previewData,
+        items: previewData.map((item: any) => ({
+          ...item,
+          positionImplementation: item.positionImplementation || user?.name || user?.username || '',
+        })),
         projectId: importProjectId,
       });
       const result = res.data || res;

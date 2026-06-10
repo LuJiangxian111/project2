@@ -239,6 +239,47 @@ export class CandidateService {
     return { message: '删除成功' };
   }
 
+  async findCandidatesWithResume(projectId?: number, positionId?: number) {
+    if (positionId) {
+      // 按岗位筛选：从 candidate_positions 获取候选人，同时获取候选人自身的 resumeUrl 和关联的 resumeUrl
+      const cps = await this.candidatePositionRepository.find({
+        where: { positionId },
+        relations: ['candidate'],
+      });
+      return cps
+        .filter(cp => cp.candidate?.resumeUrl || cp.resumeUrl)
+        .map(cp => ({
+          id: cp.candidateId,
+          name: cp.candidate?.name || '未知',
+          resumeUrl: cp.candidate?.resumeUrl || cp.resumeUrl,
+        }));
+    }
+
+    if (projectId) {
+      // 按项目筛选：先找项目下的岗位，再找候选人
+      const positions = await this.positionRepository.find({ where: { projectId } });
+      const positionIds = positions.map(p => p.id);
+      if (positionIds.length === 0) return [];
+      const cps = await this.candidatePositionRepository.find({
+        where: positionIds.map(pid => ({ positionId: pid })),
+        relations: ['candidate'],
+      });
+      return cps
+        .filter(cp => cp.candidate?.resumeUrl || cp.resumeUrl)
+        .map(cp => ({
+          id: cp.candidateId,
+          name: cp.candidate?.name || '未知',
+          resumeUrl: cp.candidate?.resumeUrl || cp.resumeUrl,
+        }));
+    }
+
+    // 无筛选：所有有简历的候选人
+    const candidates = await this.candidateRepository.find();
+    return candidates
+      .filter(c => c.resumeUrl)
+      .map(c => ({ id: c.id, name: c.name, resumeUrl: c.resumeUrl }));
+  }
+
   async matchWithPosition(
     candidateId: number,
     positionId: number,

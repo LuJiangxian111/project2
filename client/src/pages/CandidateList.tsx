@@ -262,6 +262,80 @@ export default function CandidateList() {
     ? positions.filter((p: any) => p.projectId === filterProjectId)
     : positions;
 
+  const handleExportCSV = () => {
+    const headers = ['姓名', '性别', '证件类型', '证件号码', '联系电话', '联系邮箱', '供应商', '学历类型', '学历', '领域年限', '工作状态', '期望薪资', '项目', '需求编号', '岗位类型', '岗位职务', '技术领域', '对接实施', '推荐人', '推送日期', '状态'];
+    const keys = ['name', 'gender', 'idType', 'idNumber', 'contactPhone', 'contactEmail', 'supplier', 'educationType', 'education', 'domainYears', 'workStatus', 'expectedSalary', 'projectName', 'requirementNumber', 'positionType', 'positionTitle', 'techDomain', 'implementation', 'recommender', 'pushDate', 'status'];
+
+    const rows: string[][] = [];
+    groups.forEach((group: any) => {
+      if (group.positions.length === 0) {
+        const row: string[] = keys.map((key, idx) => {
+          if (idx < 12) {
+            const val = group[key];
+            return key === 'domainYears' ? (val ?? '') : (val || '');
+          }
+          return '';
+        });
+        rows.push(row);
+      } else {
+        group.positions.forEach((pos: any, idx: number) => {
+          const row: string[] = keys.map((key, colIdx) => {
+            if (colIdx < 12) {
+              if (idx > 0) return '';
+              const val = group[key];
+              return key === 'domainYears' ? (val ?? '') : (val || '');
+            }
+            if (key === 'status') return STATUS_MAP[pos.status]?.label || pos.status || '';
+            if (key === 'pushDate') return pos.pushDate ? pos.pushDate.substring(0, 10) : '';
+            return pos[key] || '';
+          });
+          rows.push(row);
+        });
+      }
+    });
+
+    const csvContent = [headers, ...rows].map((row) =>
+      row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
+    ).join('\n');
+
+    const BOM = '\uFEFF';
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `候选人列表_${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportResumes = async () => {
+    try {
+      message.loading({ content: '正在打包简历文件...', key: 'exportResumes', duration: 0 });
+      const params = new URLSearchParams();
+      if (filterProjectId) params.append('projectId', String(filterProjectId));
+      if (filterPositionId) params.append('positionId', String(filterPositionId));
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/candidates/export-resumes?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        message.error({ content: data.message || '导出失败', key: 'exportResumes' });
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `候选人简历_${new Date().toISOString().slice(0, 10)}.zip`;
+      link.click();
+      URL.revokeObjectURL(url);
+      message.success({ content: '简历文件导出成功', key: 'exportResumes' });
+    } catch {
+      message.error({ content: '导出简历文件失败', key: 'exportResumes' });
+    }
+  };
+
   return (
     <div>
       {/* 筛选栏 */}
@@ -303,6 +377,12 @@ export default function CandidateList() {
         </Button>
         <Button type="primary" icon={<ExportOutlined />} onClick={() => setExportModalOpen(true)} disabled={groups.length === 0}>
           导出Excel
+        </Button>
+        <Button icon={<ExportOutlined />} onClick={handleExportCSV} disabled={groups.length === 0}>
+          导出CSV
+        </Button>
+        <Button icon={<ExportOutlined />} onClick={handleExportResumes} disabled={groups.length === 0}>
+          导出简历文件
         </Button>
       </div>
 
