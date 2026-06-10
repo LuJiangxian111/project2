@@ -1,19 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, IsNull } from 'typeorm';
 import { MessageBoard } from '../../entities/message-board.entity';
+import { NoticeService } from '../notice/notice.service';
 
 @Injectable()
 export class MessageBoardService {
   constructor(
     @InjectRepository(MessageBoard)
     private messageBoardRepository: Repository<MessageBoard>,
+    private noticeService: NoticeService,
   ) {}
 
   async findAll() {
-    // 只查顶级留言，子留言通过 replies 关联加载
     return this.messageBoardRepository.find({
-      where: { visible: true, parentId: null as any },
+      where: { visible: true, parentId: IsNull() },
       relations: ['replies'],
       order: { createdAt: 'DESC' },
     });
@@ -21,7 +22,21 @@ export class MessageBoardService {
 
   async create(data: Partial<MessageBoard>) {
     const msg = this.messageBoardRepository.create(data);
-    return this.messageBoardRepository.save(msg);
+    const saved = await this.messageBoardRepository.save(msg);
+
+    // 如果是回复，通知父留言作者
+    if (saved.parentId) {
+      const parent = await this.messageBoardRepository.findOne({ where: { id: saved.parentId } });
+      if (parent && parent.userId && parent.userId !== saved.userId) {
+        this.noticeService.createSystemNotice(
+          '留言回复通知',
+          `${saved.nickname || '有人'}回复了您的留言：「${saved.content.length > 30 ? saved.content.substring(0, 30) + '...' : saved.content}」`,
+          parent.userId,
+        ).catch(() => {});
+      }
+    }
+
+    return saved;
   }
 
   async remove(id: number) {

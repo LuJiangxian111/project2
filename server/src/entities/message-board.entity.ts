@@ -14,6 +14,9 @@ export class MessageBoard {
   @Column({ default: true })
   visible: boolean;
 
+  @Column({ name: 'user_id', nullable: true })
+  userId: number;
+
   @Column({ name: 'parent_id', nullable: true })
   parentId: number;
 
