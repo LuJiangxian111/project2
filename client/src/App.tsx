@@ -12,11 +12,9 @@ import PositionDetail from './pages/PositionDetail';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
 import AIAssistant from './pages/AIAssistant';
-import ApiKeyManagement from './pages/ApiKeyManagement';
 import Settings from './pages/Settings';
 import Profile from './pages/Profile';
 
-const NoticeBoard = lazy(() => import('./pages/NoticeBoard'));
 const MessageBoard = lazy(() => import('./pages/MessageBoard'));
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
@@ -62,9 +60,7 @@ export default function App() {
         <Route path="candidates" element={<CandidateList />} />
         <Route path="candidates/:id" element={<CandidateDetail />} />
         <Route path="ai" element={<AIAssistant />} />
-        <Route path="notice-board" element={<Suspense fallback={<div>加载中...</div>}><NoticeBoard /></Suspense>} />
         <Route path="message-board" element={<Suspense fallback={<div>加载中...</div>}><MessageBoard /></Suspense>} />
-        <Route path="api-keys" element={<ApiKeyManagement />} />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />
       </Route>
