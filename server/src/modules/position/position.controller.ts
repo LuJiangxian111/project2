@@ -165,6 +165,24 @@ export class PositionController {
     return this.positionService.getCandidates(id);
   }
 
+  @Delete(':id/candidates/:cpId')
+  async removeCandidate(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('cpId', ParseIntPipe) cpId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.positionService.removeCandidate(cpId, user.id);
+  }
+
+  @Post(':id/candidates/batch-remove')
+  async batchRemoveCandidates(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { cpIds: number[] },
+    @CurrentUser() user: any,
+  ) {
+    return this.positionService.batchRemoveCandidates(body.cpIds, user.id);
+  }
+
   @Put('candidate-position/:cpId/status')
   async updateCandidatePositionStatus(
     @Param('cpId', ParseIntPipe) cpId: number,

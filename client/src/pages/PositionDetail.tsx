@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Descriptions, Table, Button, Space, Spin, message, Modal, Upload, Steps, Input, Tag, Checkbox, Form, Select, Row, Col, Divider } from 'antd';
-import { ArrowLeftOutlined, RobotOutlined, PlusOutlined, ImportOutlined, UploadOutlined, SearchOutlined, EditOutlined } from '@ant-design/icons';
+import { Card, Descriptions, Table, Button, Space, Spin, message, Modal, Upload, Steps, Input, Tag, Checkbox, Form, Select, Row, Col, Divider, Popconfirm } from 'antd';
+import { ArrowLeftOutlined, RobotOutlined, PlusOutlined, ImportOutlined, UploadOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { getPosition, getPositionCandidates, addCandidateToPosition, batchImportCandidates, updatePosition } from '../api/position';
 import { matchAnalysis, analyzeFile } from '../api/ai';
 import { getCandidate } from '../api/candidate';
@@ -10,6 +10,7 @@ import StatusTag from '../components/StatusTag';
 import MatchScoreTag from '../components/MatchScoreTag';
 import CandidateModal from '../components/CandidateModal';
 import { useUserStore } from '../stores/user';
+import request from '../api/request';
 
 const CANDIDATE_FIELDS = [
   'name', 'gender', 'idType', 'idNumber', 'contactPhone', 'contactEmail',
@@ -57,6 +58,10 @@ export default function PositionDetail() {
   const [candidateDetail, setCandidateDetail] = useState<any>(null);
   const [candidateDetailLoading, setCandidateDetailLoading] = useState(false);
 
+  // 批量删除选中
+  const [selectedCpIds, setSelectedCpIds] = useState<number[]>([]);
+  const [batchDeleting, setBatchDeleting] = useState(false);
+
   // 查看候选人详情
   const handleViewCandidate = async (candidateId: number) => {
     try {
@@ -69,6 +74,37 @@ export default function PositionDetail() {
       message.error('获取候选人详情失败');
     } finally {
       setCandidateDetailLoading(false);
+    }
+  };
+
+  // 删除单个候选人
+  const handleRemoveCandidate = async (cpId: number) => {
+    try {
+      await request.delete(`/positions/${id}/candidates/${cpId}`);
+      message.success('移除成功');
+      loadData();
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '移除失败');
+    }
+  };
+
+  // 批量删除候选人
+  const handleBatchRemove = async () => {
+    if (selectedCpIds.length === 0) {
+      message.warning('请先选择要移除的候选人');
+      return;
+    }
+    try {
+      setBatchDeleting(true);
+      const res: any = await request.post(`/positions/${id}/candidates/batch-remove`, { cpIds: selectedCpIds });
+      const data = res.data || res;
+      message.success(`批量移除完成：成功 ${data.success} 条${data.failed > 0 ? `，失败 ${data.failed} 条` : ''}`);
+      setSelectedCpIds([]);
+      loadData();
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '批量移除失败');
+    } finally {
+      setBatchDeleting(false);
     }
   };
 
@@ -349,6 +385,18 @@ export default function PositionDetail() {
           style={{ borderRadius: 8, flex: '2 1 500px', minWidth: 400 }}
           extra={
             <Space>
+              {selectedCpIds.length > 0 && (
+                <Popconfirm
+                  title={`确定移除选中的 ${selectedCpIds.length} 个候选人？`}
+                  onConfirm={handleBatchRemove}
+                  okText="确定"
+                  cancelText="取消"
+                >
+                  <Button danger icon={<DeleteOutlined />} loading={batchDeleting}>
+                    批量移除 ({selectedCpIds.length})
+                  </Button>
+                </Popconfirm>
+              )}
               <Button icon={<ImportOutlined />} onClick={() => { resetImportState(); setImportModalOpen(true); }}>
                 导入候选人
               </Button>
@@ -371,9 +419,13 @@ export default function PositionDetail() {
         >
           <Table
             dataSource={candidates}
-            rowKey={(r: any) => r.id || r.candidateId}
+            rowKey={(r: any) => r.id}
             pagination={false}
             locale={{ emptyText: '暂无候选人' }}
+            rowSelection={{
+              selectedRowKeys: selectedCpIds,
+              onChange: (keys) => setSelectedCpIds(keys as number[]),
+            }}
             columns={[
               {
                 title: '姓名',
@@ -413,6 +465,14 @@ export default function PositionDetail() {
                   <Space>
                     <a onClick={() => handleViewCandidate(record.candidateId || record.id)}>查看详情</a>
                     <a onClick={() => handleAIMatch(record.candidateId || record.id)}>AI匹配</a>
+                    <Popconfirm
+                      title={`确定移除候选人「${record.candidate?.name || record.candidateName || ''}」？`}
+                      onConfirm={() => handleRemoveCandidate(record.id)}
+                      okText="确定"
+                      cancelText="取消"
+                    >
+                      <a style={{ color: '#ff4d4f' }}>移除</a>
+                    </Popconfirm>
                   </Space>
                 ),
               },

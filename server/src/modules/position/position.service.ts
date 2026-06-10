@@ -356,4 +356,35 @@ export class PositionService {
     });
     return candidatePositions;
   }
+
+  async removeCandidate(cpId: number, userId: number) {
+    const cp = await this.candidatePositionRepository.findOne({
+      where: { id: cpId },
+      relations: ['candidate', 'position'],
+    });
+    if (!cp) {
+      throw new NotFoundException('候选人岗位关联不存在');
+    }
+    await this.candidatePositionRepository.remove(cp);
+    await this.logService.log(userId, 'remove_candidate', 'position', cp.positionId, {
+      candidateId: cp.candidateId,
+      candidateName: cp.candidate?.name,
+    });
+    this.socketGateway.broadcastToAllUsers('candidate.removed', { cpId, positionId: cp.positionId, candidateId: cp.candidateId });
+    return { message: '移除成功' };
+  }
+
+  async batchRemoveCandidates(cpIds: number[], userId: number) {
+    const results = { success: 0, failed: 0, errors: [] as string[] };
+    for (const cpId of cpIds) {
+      try {
+        await this.removeCandidate(cpId, userId);
+        results.success++;
+      } catch (err: any) {
+        results.failed++;
+        results.errors.push(`ID ${cpId}: ${err.message || '未知错误'}`);
+      }
+    }
+    return results;
+  }
 }
