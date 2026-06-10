@@ -194,11 +194,64 @@ export default function ApiKeyManagement() {
         <Tabs
           items={[
             {
-              key: 'curl',
-              label: 'cURL',
+              key: 'api-list',
+              label: '接口列表',
               children: (
-                <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, overflow: 'auto' }}>
-{`# 获取项目列表
+                <div style={{ lineHeight: 2 }}>
+                  <Title level={5}>项目管理</Title>
+                  <Paragraph><Text code>GET</Text> /projects - 获取项目列表</Paragraph>
+                  <Paragraph><Text code>GET</Text> /projects/:id - 获取项目详情</Paragraph>
+                  <Paragraph><Text code>POST</Text> /projects - 创建项目</Paragraph>
+                  <Paragraph><Text code>PUT</Text> /projects/:id - 更新项目</Paragraph>
+                  <Paragraph><Text code>DELETE</Text> /projects/:id - 删除项目</Paragraph>
+
+                  <Title level={5}>岗位管理</Title>
+                  <Paragraph><Text code>GET</Text> /positions - 获取岗位列表</Paragraph>
+                  <Paragraph><Text code>GET</Text> /positions/:id - 获取岗位详情</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions - 创建岗位</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions/batch-import - 批量导入岗位</Paragraph>
+                  <Paragraph><Text code>PUT</Text> /positions/:id - 更新岗位</Paragraph>
+                  <Paragraph><Text code>DELETE</Text> /positions/:id - 删除岗位</Paragraph>
+
+                  <Title level={5}>岗位候选人</Title>
+                  <Paragraph><Text code>GET</Text> /positions/:id/candidates - 获取岗位候选人</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions/:id/candidates - 添加候选人到岗位</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions/:id/candidates/batch-import - 批量导入候选人</Paragraph>
+                  <Paragraph><Text code>DELETE</Text> /positions/:positionId/candidates/:cpId - 移除候选人</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions/:id/candidates/batch-remove - 批量移除候选人</Paragraph>
+                  <Paragraph><Text code>PUT</Text> /candidate-position/:cpId/status - 更新候选人状态</Paragraph>
+
+                  <Title level={5}>候选人管理</Title>
+                  <Paragraph><Text code>GET</Text> /candidates - 获取候选人列表</Paragraph>
+                  <Paragraph><Text code>GET</Text> /candidates/:id - 获取候选人详情</Paragraph>
+                  <Paragraph><Text code>POST</Text> /candidates - 创建候选人</Paragraph>
+                  <Paragraph><Text code>PUT</Text> /candidates/:id - 更新候选人</Paragraph>
+                  <Paragraph><Text code>DELETE</Text> /candidates/:id - 删除候选人</Paragraph>
+
+                  <Title level={5}>AI 智能助手（完整功能）</Title>
+                  <Paragraph><Text code>POST</Text> /ai/agent-chat - AI Agent对话（支持所有工具）</Paragraph>
+                  <Paragraph><Text code>POST</Text> /ai/agent-chat-with-file - AI Agent多文件对话</Paragraph>
+                  <Paragraph><Text code>POST</Text> /ai/chat - AI 基础对话</Paragraph>
+                  <Paragraph><Text code>POST</Text> /ai/match - AI 候选人匹配</Paragraph>
+                  <Paragraph><Text code>POST</Text> /ai/analyze-risk - AI 风险分析</Paragraph>
+                  <Paragraph><Text code>POST</Text> /ai/generate-report - AI 生成报告</Paragraph>
+
+                  <Title level={5}>面试管理</Title>
+                  <Paragraph><Text code>GET</Text> /interviews - 获取面试列表</Paragraph>
+                  <Paragraph><Text code>POST</Text> /interviews - 创建面试</Paragraph>
+
+                  <Title level={5}>数据统计</Title>
+                  <Paragraph><Text code>GET</Text> /dashboard/stats - 获取仪表盘统计</Paragraph>
+                </div>
+              ),
+            },
+            {
+              key: 'curl',
+              label: 'cURL 示例',
+              children: (
+                <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, overflow: 'auto', fontSize: 12 }}>
+{`# ===== 项目管理 =====
+# 获取项目列表
 curl -X GET ${baseUrl}/projects \\
   -H "x-api-key: YOUR_API_KEY"
 
@@ -208,82 +261,223 @@ curl -X POST ${baseUrl}/projects \\
   -H "Content-Type: application/json" \\
   -d '{"name":"新项目","description":"项目描述"}'
 
+# ===== 岗位管理 =====
 # 获取岗位列表
 curl -X GET ${baseUrl}/positions \\
   -H "x-api-key: YOUR_API_KEY"
 
+# 批量导入岗位
+curl -X POST ${baseUrl}/positions/batch-import \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"projectId":1,"items":[{"positionDuty":"Java开发","department":"技术部"}]}'
+
+# ===== 候选人管理 =====
 # 创建候选人
 curl -X POST ${baseUrl}/candidates \\
   -H "x-api-key: YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"name":"张三","phone":"13800138000"}'
+  -d '{"name":"张三","contactPhone":"13800138000"}'
 
-# AI 对话
-curl -X POST ${baseUrl}/ai/chat \\
+# 添加候选人到岗位
+curl -X POST ${baseUrl}/positions/1/candidates \\
   -H "x-api-key: YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"message":"帮我分析当前招聘情况"}'
+  -d '{"candidateId":1}'
 
-# AI 风险分析
-curl -X POST ${baseUrl}/ai/analyze-risk \\
+# 批量导入候选人到岗位
+curl -X POST ${baseUrl}/positions/1/candidates/batch-import \\
   -H "x-api-key: YOUR_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{}'`}
+  -d '{"items":[{"name":"张三","contactPhone":"13800138000"}]}'
+
+# 更新候选人状态
+curl -X PUT ${baseUrl}/candidate-position/1/status \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"status":"interview_passed"}'
+
+# 移除候选人
+curl -X DELETE ${baseUrl}/positions/1/candidates/1 \\
+  -H "x-api-key: YOUR_API_KEY"
+
+# ===== AI Agent（完整功能）=====
+# AI Agent 对话（支持搜索、导入、导出、状态更新等所有工具）
+curl -X POST ${baseUrl}/ai/agent-chat \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"message":"搜索需求编号R2508209923的岗位，并将候选人张三的状态改为面试通过"}'
+
+# AI Agent 多轮对话
+curl -X POST ${baseUrl}/ai/agent-chat \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"messages":[{"role":"user","content":"有哪些项目"},{"role":"assistant","content":"当前有3个项目..."},{"role":"user","content":"第一个项目有哪些岗位"}]}'
+
+# AI Agent 上传文件分析
+curl -X POST ${baseUrl}/ai/agent-chat-with-file \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -F "files=@candidates.xlsx" \\
+  -F 'messages=[{"role":"user","content":"帮我把这些候选人导入到岗位1"}]'
+
+# AI 匹配分析
+curl -X POST ${baseUrl}/ai/match \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"candidateId":1,"positionId":1}'
+
+# ===== 数据统计 =====
+curl -X GET ${baseUrl}/dashboard/stats \\
+  -H "x-api-key: YOUR_API_KEY"`}
                 </pre>
               ),
             },
             {
               key: 'python',
-              label: 'Python',
+              label: 'Python 示例',
               children: (
-                <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, overflow: 'auto' }}>
+                <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, overflow: 'auto', fontSize: 12 }}>
 {`import requests
 
 API_BASE = "${baseUrl}"
 API_KEY = "YOUR_API_KEY"
-headers = {"x-api-key": API_KEY}
+headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
-# 获取项目列表
+# ===== 项目管理 =====
 resp = requests.get(f"{API_BASE}/projects", headers=headers)
 projects = resp.json()
 
-# 创建项目
-resp = requests.post(f"{API_BASE}/projects", headers=headers, 
+resp = requests.post(f"{API_BASE}/projects", headers=headers,
     json={"name": "新项目", "description": "项目描述"})
 
-# 获取岗位列表
+# ===== 岗位管理 =====
 resp = requests.get(f"{API_BASE}/positions", headers=headers)
 
-# AI 对话
-resp = requests.post(f"{API_BASE}/ai/chat", headers=headers,
-    json={"message": "帮我分析当前招聘情况"})`}
+# 批量导入岗位
+resp = requests.post(f"{API_BASE}/positions/batch-import", headers=headers,
+    json={"projectId": 1, "items": [{"positionDuty": "Java开发", "department": "技术部"}]})
+
+# ===== 候选人管理 =====
+# 创建候选人
+resp = requests.post(f"{API_BASE}/candidates", headers=headers,
+    json={"name": "张三", "contactPhone": "13800138000"})
+
+# 添加候选人到岗位
+resp = requests.post(f"{API_BASE}/positions/1/candidates", headers=headers,
+    json={"candidateId": 1})
+
+# 批量导入候选人
+resp = requests.post(f"{API_BASE}/positions/1/candidates/batch-import",
+    headers=headers,
+    json={"items": [{"name": "张三", "contactPhone": "13800138000"}]})
+
+# 更新候选人状态
+resp = requests.put(f"{API_BASE}/candidate-position/1/status", headers=headers,
+    json={"status": "interview_passed"})
+
+# ===== AI Agent（完整功能）=====
+# AI Agent 对话（支持搜索、导入、导出、状态更新等所有工具）
+resp = requests.post(f"{API_BASE}/ai/agent-chat", headers=headers,
+    json={"message": "搜索需求编号R2508209923的岗位，并将候选人张三的状态改为面试通过"})
+
+# AI Agent 多轮对话
+resp = requests.post(f"{API_BASE}/ai/agent-chat", headers=headers,
+    json={"messages": [
+        {"role": "user", "content": "有哪些项目"},
+        {"role": "assistant", "content": "当前有3个项目..."},
+        {"role": "user", "content": "第一个项目有哪些岗位"}
+    ]})
+
+# AI Agent 上传文件
+with open("candidates.xlsx", "rb") as f:
+    resp = requests.post(f"{API_BASE}/ai/agent-chat-with-file",
+        headers={"x-api-key": API_KEY},
+        files={"files": f},
+        data={"messages": '[{"role":"user","content":"帮我把这些候选人导入到岗位1"}]'})
+
+# AI 匹配分析
+resp = requests.post(f"{API_BASE}/ai/match", headers=headers,
+    json={"candidateId": 1, "positionId": 1})
+
+# ===== 数据统计 =====
+resp = requests.get(f"{API_BASE}/dashboard/stats", headers=headers)`}
                 </pre>
               ),
             },
             {
               key: 'javascript',
-              label: 'JavaScript',
+              label: 'JavaScript 示例',
               children: (
-                <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, overflow: 'auto' }}>
+                <pre style={{ background: '#f5f5f5', padding: 16, borderRadius: 8, overflow: 'auto', fontSize: 12 }}>
 {`const API_BASE = "${baseUrl}";
 const API_KEY = "YOUR_API_KEY";
 const headers = { "x-api-key": API_KEY, "Content-Type": "application/json" };
 
-// 获取项目列表
-const projects = await fetch(API_BASE + "/projects", { headers })
-  .then(r => r.json());
+// ===== 项目管理 =====
+const projects = await fetch(API_BASE + "/projects", { headers }).then(r => r.json());
 
-// 创建项目
 const newProject = await fetch(API_BASE + "/projects", {
   method: "POST", headers,
   body: JSON.stringify({ name: "新项目", description: "项目描述" }),
 }).then(r => r.json());
 
-// AI 对话
-const aiResult = await fetch(API_BASE + "/ai/chat", {
+// ===== 岗位管理 =====
+const positions = await fetch(API_BASE + "/positions", { headers }).then(r => r.json());
+
+// 批量导入岗位
+await fetch(API_BASE + "/positions/batch-import", {
   method: "POST", headers,
-  body: JSON.stringify({ message: "帮我分析当前招聘情况" }),
-}).then(r => r.json());`}
+  body: JSON.stringify({ projectId: 1, items: [{ positionDuty: "Java开发", department: "技术部" }] }),
+}).then(r => r.json());
+
+// ===== 候选人管理 =====
+// 创建候选人
+await fetch(API_BASE + "/candidates", {
+  method: "POST", headers,
+  body: JSON.stringify({ name: "张三", contactPhone: "13800138000" }),
+}).then(r => r.json());
+
+// 添加候选人到岗位
+await fetch(API_BASE + "/positions/1/candidates", {
+  method: "POST", headers,
+  body: JSON.stringify({ candidateId: 1 }),
+}).then(r => r.json());
+
+// 更新候选人状态
+await fetch(API_BASE + "/candidate-position/1/status", {
+  method: "PUT", headers,
+  body: JSON.stringify({ status: "interview_passed" }),
+}).then(r => r.json());
+
+// ===== AI Agent（完整功能）=====
+// AI Agent 对话（支持搜索、导入、导出、状态更新等所有工具）
+const aiResult = await fetch(API_BASE + "/ai/agent-chat", {
+  method: "POST", headers,
+  body: JSON.stringify({ message: "搜索需求编号R2508209923的岗位，并将候选人张三的状态改为面试通过" }),
+}).then(r => r.json());
+
+// AI Agent 多轮对话
+const aiResult2 = await fetch(API_BASE + "/ai/agent-chat", {
+  method: "POST", headers,
+  body: JSON.stringify({ messages: [
+    { role: "user", content: "有哪些项目" },
+    { role: "assistant", content: "当前有3个项目..." },
+    { role: "user", content: "第一个项目有哪些岗位" },
+  ]}),
+}).then(r => r.json());
+
+// AI Agent 上传文件
+const formData = new FormData();
+formData.append("files", fileInput.files[0]);
+formData.append("messages", JSON.stringify([{ role: "user", content: "帮我把这些候选人导入到岗位1" }]));
+const aiFileResult = await fetch(API_BASE + "/ai/agent-chat-with-file", {
+  method: "POST",
+  headers: { "x-api-key": API_KEY },
+  body: formData,
+}).then(r => r.json());
+
+// ===== 数据统计 =====
+const stats = await fetch(API_BASE + "/dashboard/stats", { headers }).then(r => r.json());`}
                 </pre>
               ),
             },

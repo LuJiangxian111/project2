@@ -11,10 +11,14 @@ import { PositionModule } from '../position/position.module';
 import { CandidateModule } from '../candidate/candidate.module';
 import { InterviewModule } from '../interview/interview.module';
 import { AiModule } from '../ai/ai.module';
+import { Project } from '../../entities/project.entity';
+import { Position } from '../../entities/position.entity';
+import { Candidate } from '../../entities/candidate.entity';
+import { Interview } from '../../entities/interview.entity';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([ApiKey]),
+    TypeOrmModule.forFeature([ApiKey, Project, Position, Candidate, Interview]),
     LogModule,
     ProjectModule,
     PositionModule,
