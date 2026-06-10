@@ -1,4 +1,4 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 
 @Entity('message_board')
 export class MessageBoard {
@@ -13,6 +13,16 @@ export class MessageBoard {
 
   @Column({ default: true })
   visible: boolean;
+
+  @Column({ name: 'parent_id', nullable: true })
+  parentId: number;
+
+  @ManyToOne(() => MessageBoard, (msg) => msg.replies)
+  @JoinColumn({ name: 'parent_id' })
+  parent: MessageBoard;
+
+  @OneToMany(() => MessageBoard, (msg) => msg.parent)
+  replies: MessageBoard[];
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

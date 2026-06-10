@@ -11,7 +11,12 @@ export class MessageBoardService {
   ) {}
 
   async findAll() {
-    return this.messageBoardRepository.find({ where: { visible: true }, order: { createdAt: 'DESC' } });
+    // 只查顶级留言，子留言通过 replies 关联加载
+    return this.messageBoardRepository.find({
+      where: { visible: true, parentId: null as any },
+      relations: ['replies'],
+      order: { createdAt: 'DESC' },
+    });
   }
 
   async create(data: Partial<MessageBoard>) {

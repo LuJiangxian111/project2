@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, List, Modal, Form, Input, Button, message, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, DeleteOutlined, MessageOutlined } from '@ant-design/icons';
 import { getMessages, createMessage, deleteMessage } from '../api/message-board';
 import { useUserStore } from '../stores/user';
 
@@ -13,6 +13,11 @@ export default function MessageBoard() {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
 
+  // 回复相关
+  const [replyingTo, setReplyingTo] = useState<number | null>(null);
+  const [replyContent, setReplyContent] = useState('');
+  const [replySubmitting, setReplySubmitting] = useState(false);
+
   useEffect(() => {
     loadMessages();
   }, []);
@@ -22,8 +27,13 @@ export default function MessageBoard() {
       setLoading(true);
       const res: any = await getMessages();
       const data = res.data || res || [];
-      // Sort by date, newest first
       data.sort((a: any, b: any) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+      // 排序回复按时间正序
+      data.forEach((msg: any) => {
+        if (msg.replies) {
+          msg.replies.sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        }
+      });
       setMessages(data);
     } catch (err: any) {
       message.error(err.message || '加载留言失败');
@@ -46,6 +56,29 @@ export default function MessageBoard() {
       message.error(err.message || '留言失败');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleReply = async (parentId: number) => {
+    if (!replyContent.trim()) {
+      message.warning('请输入回复内容');
+      return;
+    }
+    try {
+      setReplySubmitting(true);
+      await createMessage({
+        nickname: user?.nickname || user?.name || user?.username || '',
+        content: replyContent,
+        parentId,
+      });
+      message.success('回复成功');
+      setReplyingTo(null);
+      setReplyContent('');
+      loadMessages();
+    } catch {
+      message.error('回复失败');
+    } finally {
+      setReplySubmitting(false);
     }
   };
 
@@ -83,16 +116,91 @@ export default function MessageBoard() {
                     <strong>{item.nickname || '匿名用户'}</strong>
                   </div>
                   <div style={{ color: '#595959', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{item.content}</div>
-                  <div style={{ color: '#8c8c8c', fontSize: 13 }}>
-                    {item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN') : ''}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                    <span style={{ color: '#8c8c8c', fontSize: 13 }}>
+                      {item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN') : ''}
+                    </span>
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<MessageOutlined />}
+                      style={{ padding: 0, fontSize: 13 }}
+                      onClick={() => {
+                        setReplyingTo(replyingTo === item.id ? null : item.id);
+                        setReplyContent('');
+                      }}
+                    >
+                      回复
+                    </Button>
+                    {isAdmin && (
+                      <Popconfirm title="确定删除此留言？" onConfirm={() => handleDelete(item.id)} okText="确定" cancelText="取消">
+                        <Button type="link" danger size="small" icon={<DeleteOutlined />} style={{ padding: 0, fontSize: 13 }}>
+                          删除
+                        </Button>
+                      </Popconfirm>
+                    )}
                   </div>
                 </div>
-                {isAdmin && (
-                  <Popconfirm title="确定删除此留言？" onConfirm={() => handleDelete(item.id)} okText="确定" cancelText="取消">
-                    <Button type="text" danger icon={<DeleteOutlined />} />
-                  </Popconfirm>
-                )}
               </div>
+
+              {/* 回复列表 */}
+              {item.replies && item.replies.length > 0 && (
+                <div style={{ marginTop: 12, paddingLeft: 16, borderLeft: '2px solid #f0f0f0' }}>
+                  {item.replies.map((reply: any) => (
+                    <div key={reply.id} style={{ marginBottom: 10 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                        <strong style={{ fontSize: 13 }}>{reply.nickname || '匿名用户'}</strong>
+                        <span style={{ color: '#8c8c8c', fontSize: 12 }}>
+                          {reply.createdAt ? new Date(reply.createdAt).toLocaleString('zh-CN') : ''}
+                        </span>
+                        {isAdmin && (
+                          <Popconfirm title="确定删除此回复？" onConfirm={() => handleDelete(reply.id)} okText="确定" cancelText="取消">
+                            <Button type="link" danger size="small" icon={<DeleteOutlined />} style={{ padding: 0, fontSize: 12 }} />
+                          </Popconfirm>
+                        )}
+                      </div>
+                      <div style={{ color: '#595959', fontSize: 13, whiteSpace: 'pre-wrap' }}>{reply.content}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* 回复输入框 */}
+              {replyingTo === item.id && (
+                <div style={{ marginTop: 12, paddingLeft: 16, borderLeft: '2px solid #f0f0f0' }}>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <Input.TextArea
+                      value={replyContent}
+                      onChange={(e) => setReplyContent(e.target.value)}
+                      placeholder="输入回复内容..."
+                      rows={2}
+                      style={{ flex: 1 }}
+                      onPressEnter={(e) => {
+                        if (!e.shiftKey) {
+                          e.preventDefault();
+                          handleReply(item.id);
+                        }
+                      }}
+                    />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <Button
+                        type="primary"
+                        size="small"
+                        loading={replySubmitting}
+                        onClick={() => handleReply(item.id)}
+                      >
+                        发送
+                      </Button>
+                      <Button
+                        size="small"
+                        onClick={() => { setReplyingTo(null); setReplyContent(''); }}
+                      >
+                        取消
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </Card>
           </List.Item>
         )}
