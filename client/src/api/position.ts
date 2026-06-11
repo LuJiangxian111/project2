@@ -76,3 +76,6 @@ export const batchImportPositions = (data: { items: any[]; projectId: number }) 
 
 export const batchUpdatePositions = (ids: number[], data: Partial<any>) =>
   request.put('/positions/batch/update', { ids, data });
+
+export const batchDeletePositions = (ids: number[]) =>
+  request.post('/positions/batch-delete', { ids });

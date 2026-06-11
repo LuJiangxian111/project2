@@ -17,7 +17,7 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { join } from 'path';
 import { Response } from 'express';
-import { ZipArchive } from 'archiver';
+import * as archiver from 'archiver';
 import * as fs from 'fs';
 import { CandidateService } from './candidate.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -54,7 +54,7 @@ export class CandidateController {
   @Post('upload-resume')
   @UseInterceptors(FileInterceptor('file', {
     storage: diskStorage({
-      destination: join(__dirname, '..', '..', 'uploads', 'resumes'),
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'resumes'),
       filename: (_req, file, cb) => {
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
         const ext = file.originalname.split('.').pop();
@@ -74,12 +74,20 @@ export class CandidateController {
   async exportResumes(
     @Query('projectId') projectId?: string,
     @Query('positionId') positionId?: string,
+    @Query('candidateIds') candidateIdsStr?: string,
     @Res() res?: Response,
   ) {
+    // 支持按候选人ID列表筛选
+    let candidateIds: number[] | undefined;
+    if (candidateIdsStr) {
+      candidateIds = candidateIdsStr.split(',').map(Number).filter(n => !isNaN(n));
+    }
+
     // 查询有简历的候选人
     const candidates = await this.candidateService.findCandidatesWithResume(
       projectId ? Number(projectId) : undefined,
       positionId ? Number(positionId) : undefined,
+      candidateIds,
     );
 
     if (candidates.length === 0) {
@@ -90,10 +98,10 @@ export class CandidateController {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename=resumes_${Date.now()}.zip`);
 
-    const archive = new ZipArchive({ zlib: { level: 5 } });
+    const archive = (archiver as any)('zip', { zlib: { level: 5 } });
     archive.pipe(res);
 
-    const uploadsDir = join(__dirname, '..', '..', 'uploads');
+    const uploadsDir = join(__dirname, '..', '..', '..', 'uploads');
     let addedCount = 0;
 
     for (const candidate of candidates) {

@@ -14,8 +14,37 @@ const DEFAULT_LLM_BASE_URL = process.env.LLM_BASE_URL || 'https://api.openai.com
 const DEFAULT_LLM_API_KEY = process.env.LLM_API_KEY || '';
 const DEFAULT_LLM_MODEL = process.env.LLM_MODEL || 'gpt-3.5-turbo';
 
+// 将Excel日期序列号转换为正常日期字符串
+function convertExcelDate(value: any): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const str = String(value).trim();
+
+  // 已经是正常日期格式（如 2024-01-15, 2024/01/15）
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
+    return str.replace(/\//g, '-').substring(0, 10);
+  }
+
+  // Excel日期序列号（纯数字，如 44368 表示 2021-06-17）
+  const num = Number(str);
+  if (!isNaN(num) && num > 1000 && num < 100000) {
+    // Excel的日期起点是1900-01-01，但有一个闰年bug（1900-02-29不存在但Excel认为存在）
+    // 所以序列号 >= 60 时需要减1天
+    const epoch = new Date(1899, 11, 30); // 1899-12-30
+    const date = new Date(epoch.getTime() + num * 86400000);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+
+  // 无法识别的格式，返回null避免数据库报错
+  return null;
+}
+
 @Injectable()
 export class AiService {
+  private currentSavedFiles: { fileName: string; savedUrl: string; size: number }[] = [];
+
   constructor(
     @InjectRepository(User)
     private userRepository: Repository<User>,
@@ -116,6 +145,47 @@ ${fileContent}`;
   ): Promise<{ score: number; detail: any }> {
     const { client, model } = await this.getClient(userId);
 
+    // 如果简历文本为空但有简历链接，尝试读取简历文件内容
+    let resumeText = candidate.resumeText || '';
+    if (!resumeText && candidate.resumeUrl) {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const resumePath = path.join(__dirname, '..', '..', '..', candidate.resumeUrl.replace(/^\//, ''));
+        if (fs.existsSync(resumePath)) {
+          const ext = candidate.resumeUrl.split('.').pop()?.toLowerCase();
+          if (ext === 'pdf') {
+            const pdfParse = require('pdf-parse');
+            const dataBuffer = fs.readFileSync(resumePath);
+            const pdfData = await pdfParse(dataBuffer);
+            resumeText = pdfData.text || '';
+          } else if (ext === 'xlsx' || ext === 'xls') {
+            const XLSX = require('xlsx');
+            const workbook = XLSX.readFile(resumePath);
+            const allText: string[] = [];
+            for (const sheetName of workbook.SheetNames) {
+              const sheet = workbook.Sheets[sheetName];
+              allText.push(XLSX.utils.sheet_to_csv(sheet));
+            }
+            resumeText = allText.join('\n\n');
+          } else if (ext === 'docx' || ext === 'doc') {
+            // docx/doc暂无法直接提取，标记信息
+            resumeText = `[Word简历文件已上传，路径: ${candidate.resumeUrl}，文件大小: ${(fs.statSync(resumePath).size / 1024).toFixed(1)}KB]`;
+          } else {
+            const buffer = fs.readFileSync(resumePath);
+            resumeText = buffer.toString('utf-8').substring(0, 30000);
+          }
+          // 保存到数据库以便后续使用
+          if (resumeText) {
+            candidate.resumeText = resumeText.substring(0, 30000);
+            await this.candidateRepository.save(candidate);
+          }
+        }
+      } catch (err) {
+        console.error('[AI] 读取简历文件失败:', err?.message || err);
+      }
+    }
+
     const candidateInfo = `
 姓名: ${candidate.name}
 性别: ${candidate.gender || '未提供'}
@@ -126,7 +196,7 @@ ${fileContent}`;
 期望薪资: ${candidate.expectedSalary || '未提供'}
 供应商: ${candidate.supplier || '未提供'}
 简历链接: ${candidate.resumeUrl || '未提供'}
-简历内容: ${candidate.resumeText || '未提供'}`;
+简历内容: ${resumeText || '未提供'}`;
 
     const positionInfo = `
 岗位职务: ${position.positionDuty}
@@ -499,8 +569,11 @@ ${fileContent}`;
     };
   }
 
-  async agentChat(messages: { role: string; content: string }[], userId: number) {
+  async agentChat(messages: { role: string; content: string }[], userId: number, savedFiles?: { fileName: string; savedUrl: string; size: number }[]) {
     const { client, model } = await this.getClient(userId);
+
+    // 存储已保存的文件信息，供工具使用
+    this.currentSavedFiles = savedFiles || [];
 
     const tools = [
       // ===== Project tools =====
@@ -669,19 +742,20 @@ ${fileContent}`;
         type: 'function' as const,
         function: {
           name: 'import_positions_from_data',
-          description: '批量导入岗位数据',
+          description: '智能批量导入岗位数据。系统会自动进行字段映射，将Excel列名匹配到系统标准字段（如"岗位/职位"→positionDuty, "岗位类型"→positionType, "需求人数"→requiredCount等）。传入原始数据即可，无需手动映射字段名。支持所有岗位字段：systemName(系统), department(部门), requirementNumber(需求编号), positionType(岗位类型), positionDuty(岗位职务), techDomain(技术领域), majorType(专业类型), levelDistribution(职级分布), salaryRange(薪资范围), requirements(岗位要求), responsibilities(岗位职责), domainExperience(领域经验), region(地区), deliveryForm(交付形式), positionImplementation(岗位实施), urgency(紧急程度), requiredCount(需求人数), expectedDate(期望到岗日期)。',
           parameters: {
             type: 'object',
             properties: {
               projectId: { type: 'number', description: '所属项目ID' },
               items: {
                 type: 'array',
-                description: '岗位数据数组',
+                description: '岗位数据数组，每条记录是一个对象，键名可以是Excel原始列名或系统标准字段名，系统会自动映射',
                 items: {
                   type: 'object',
                   properties: {
                     systemName: { type: 'string', description: '系统名称' },
                     department: { type: 'string', description: '部门' },
+                    requirementNumber: { type: 'string', description: '需求编号' },
                     positionDuty: { type: 'string', description: '岗位职务' },
                     positionType: { type: 'string', description: '岗位类型' },
                     techDomain: { type: 'string', description: '技术领域' },
@@ -693,8 +767,10 @@ ${fileContent}`;
                     domainExperience: { type: 'string', description: '领域经验' },
                     region: { type: 'string', description: '地区' },
                     deliveryForm: { type: 'string', description: '交付形式' },
-                    urgency: { type: 'string', description: '紧急程度' },
+                    positionImplementation: { type: 'string', description: '岗位实施' },
+                    urgency: { type: 'string', description: '紧急程度(low/medium/high/critical)' },
                     requiredCount: { type: 'number', description: '需求人数' },
+                    expectedDate: { type: 'string', description: '期望到岗日期' },
                   },
                 },
               },
@@ -808,13 +884,13 @@ ${fileContent}`;
         type: 'function' as const,
         function: {
           name: 'import_candidates_from_data',
-          description: '批量导入候选人数据',
+          description: '智能批量导入候选人数据。系统会自动进行字段映射，将Excel列名匹配到系统标准字段（如"姓名"→name, "手机"→contactPhone, "邮箱"→contactEmail等）。传入原始数据即可，无需手动映射字段名。',
           parameters: {
             type: 'object',
             properties: {
               items: {
                 type: 'array',
-                description: '候选人数据数组',
+                description: '候选人数据数组，每条记录是一个对象，键名可以是Excel原始列名或系统标准字段名，系统会自动映射',
                 items: {
                   type: 'object',
                   properties: {
@@ -824,12 +900,15 @@ ${fileContent}`;
                     idNumber: { type: 'string', description: '证件号码' },
                     contactPhone: { type: 'string', description: '联系电话' },
                     contactEmail: { type: 'string', description: '联系邮箱' },
+                    areaCode: { type: 'string', description: '区号' },
                     educationType: { type: 'string', description: '学历类型' },
                     education: { type: 'string', description: '学历' },
                     domainYears: { type: 'string', description: '领域年限' },
                     workStatus: { type: 'string', description: '工作状态' },
                     expectedSalary: { type: 'string', description: '期望薪资' },
                     supplier: { type: 'string', description: '供应商' },
+                    recommender: { type: 'string', description: '推荐人' },
+                    recommendReason: { type: 'string', description: '推荐理由' },
                   },
                 },
               },
@@ -962,7 +1041,7 @@ ${fileContent}`;
         type: 'function' as const,
         function: {
           name: 'upload_candidate_resume',
-          description: '为候选人上传简历文件。根据候选人姓名匹配候选人，将简历文件保存到服务器并更新候选人的简历链接。如果候选人已有简历，新简历将覆盖旧简历。支持批量上传，传入resumes数组每个元素包含candidateName和fileContent（文件名或文件内容摘要）。',
+          description: '为候选人上传简历文件。根据候选人姓名匹配候选人，将简历文件保存到服务器并更新候选人的简历链接。如果候选人已有简历，新简历将覆盖旧简历。支持批量上传，传入resumes数组每个元素包含candidateName和resumeUrl（已保存的文件路径）。resumeUrl请使用系统提供的保存路径。',
           parameters: {
             type: 'object',
             properties: {
@@ -973,10 +1052,10 @@ ${fileContent}`;
                   type: 'object',
                   properties: {
                     candidateName: { type: 'string', description: '候选人姓名' },
-                    fileName: { type: 'string', description: '简历文件名' },
+                    resumeUrl: { type: 'string', description: '已保存的简历文件路径，如/uploads/resumes/xxx.pdf' },
                     positionId: { type: 'number', description: '岗位ID（可选）' },
                   },
-                  required: ['candidateName', 'fileName'],
+                  required: ['candidateName', 'resumeUrl'],
                 },
               },
             },
@@ -1058,16 +1137,30 @@ AI分析：候选人匹配分析、风险分析、生成报告
 2. **岗位需求文件**（Excel/CSV格式，包含岗位职务、需求人数、部门、系统等列）：
    - 识别意图：用户想批量导入岗位需求
    - 必须主动询问：这些岗位要导入到哪个项目？（除非用户已明确指定）
-   - 使用import_positions_from_data工具导入
+   - **重要**：文件内容已解析为JSON格式，每行是一个对象，键名是Excel表头列名
+   - 直接将JSON数据原样传给import_positions_from_data工具的items参数，不要修改键名！系统会自动映射
+   - 例如：如果Excel列名是"岗位"，传{"岗位":"Java开发"}，不要改成{"positionDuty":"Java开发"}
+   - 绝对不要自己重新构建数据或遗漏字段，直接传原始JSON数据
 
 3. **候选人列表文件**（Excel/CSV格式，包含姓名、电话、学历、供应商等列）：
    - 识别意图：用户想批量导入候选人
    - 必须主动询问：这些候选人要分配到哪个岗位？（除非用户已明确指定）
    - 先用search_positions找到目标岗位，再使用import_candidates_from_data导入
+   - **重要**：文件内容已解析为JSON格式，直接将原始JSON数据传给工具，不要修改键名，系统会自动映射
 
 4. **不确定的文件**：
    - 先分析文件内容，判断最可能的类型
-   - 向用户确认文件类型和操作意图后再执行`,
+   - 向用户确认文件类型和操作意图后再执行
+
+Excel文件处理规则（非常重要）：
+- 文件内容已解析为JSON格式，每行数据是一个对象，键名是表头列名
+- 你必须严格按照JSON数据中的每一行来构建导入数据，一行对应一条记录
+- 绝对不能凭空捏造数据，也不能遗漏任何一行
+- 如果JSON数据有22行，就必须导入22条记录
+- 字段映射时，仔细匹配表头列名和工具参数名的含义，不要张冠李戴
+- 如果某列数据为空，对应字段填null或空字符串，不要编造内容
+- 导入前先向用户展示你识别到的总行数和字段映射关系，确认后再执行导入
+- 导入完成后，报告成功导入的数量，如果与文件行数不一致，说明原因`,
     };
 
     const allMessages = [systemMessage, ...messages] as any[];
@@ -1273,29 +1366,140 @@ AI分析：候选人匹配分析、风险分析、生成报告
       }
       case 'import_positions_from_data': {
         const items: any[] = args.items || [];
+        const projectId = args.projectId;
+        if (!projectId) return { error: '请指定所属项目ID' };
+        if (items.length === 0) return { error: '没有可导入的数据' };
+
+        // 字段映射表：Excel常见列名 → 系统标准字段名
+        const fieldAliases: Record<string, string> = {
+          '系统': 'systemName', '系统名称': 'systemName', '系统名': 'systemName',
+          '部门': 'department', '部门名称': 'department',
+          '需求编号': 'requirementNumber', '编号': 'requirementNumber',
+          '岗位类型': 'positionType', '职位类型': 'positionType', '类型': 'positionType',
+          '岗位职务': 'positionDuty', '岗位': 'positionDuty', '职位': 'positionDuty', '岗位名称': 'positionDuty', '职位名称': 'positionDuty', '职务': 'positionDuty',
+          '技术领域': 'techDomain', '技术方向': 'techDomain',
+          '专业类型': 'majorType', '专业': 'majorType',
+          '职级分布': 'levelDistribution', '职级': 'levelDistribution', '级别': 'levelDistribution',
+          '薪资范围': 'salaryRange', '薪资': 'salaryRange', '薪酬': 'salaryRange', '工资': 'salaryRange',
+          '岗位要求': 'requirements', '任职要求': 'requirements', '要求': 'requirements', '任职资格': 'requirements',
+          '岗位职责': 'responsibilities', '职责': 'responsibilities', '工作职责': 'responsibilities', '工作内容': 'responsibilities',
+          '领域经验': 'domainExperience', '经验要求': 'domainExperience', '经验': 'domainExperience',
+          '地区': 'region', '工作地点': 'region', '地点': 'region', '城市': 'region',
+          '交付形式': 'deliveryForm', '交付方式': 'deliveryForm',
+          '岗位实施': 'positionImplementation', '实施': 'positionImplementation',
+          '紧急程度': 'urgency', '紧急度': 'urgency', '优先级': 'urgency',
+          '需求人数': 'requiredCount', '人数': 'requiredCount', '招聘人数': 'requiredCount', 'headcount': 'requiredCount',
+          '期望到岗日期': 'expectedDate', '到岗日期': 'expectedDate', '期望日期': 'expectedDate',
+        };
+
+        // 标准字段名集合
+        const standardFields = new Set([
+          'systemName', 'department', 'requirementNumber', 'positionType', 'positionDuty',
+          'techDomain', 'majorType', 'levelDistribution', 'salaryRange', 'requirements',
+          'responsibilities', 'domainExperience', 'region', 'deliveryForm', 'positionImplementation',
+          'urgency', 'requiredCount', 'expectedDate', 'projectId', 'status',
+        ]);
+
         let successCount = 0;
+        let updatedCount = 0;
         const errors: string[] = [];
+
         for (let i = 0; i < items.length; i++) {
           try {
-            const item = items[i];
+            const rawItem = items[i];
+            // 智能字段映射：将Excel列名映射为系统标准字段名
+            const mappedItem: Record<string, any> = {};
+            for (const [key, value] of Object.entries(rawItem)) {
+              if (value === null || value === undefined || value === '') continue;
+              const trimmedKey = key.trim();
+              // 已经是标准字段名
+              if (standardFields.has(trimmedKey)) {
+                mappedItem[trimmedKey] = value;
+              }
+              // 通过别名映射
+              else if (fieldAliases[trimmedKey]) {
+                mappedItem[fieldAliases[trimmedKey]] = value;
+              }
+              // 尝试模糊匹配：去除空格、下划线后匹配
+              else {
+                const normalizedKey = trimmedKey.replace(/[\s_\-]/g, '').toLowerCase();
+                let matched = false;
+                for (const [alias, field] of Object.entries(fieldAliases)) {
+                  if (alias.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
+                    mappedItem[field] = value;
+                    matched = true;
+                    break;
+                  }
+                }
+                if (!matched) {
+                  // 也尝试直接匹配标准字段名（忽略大小写下划线）
+                  for (const sf of standardFields) {
+                    if (sf.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
+                      mappedItem[sf] = value;
+                      matched = true;
+                      break;
+                    }
+                  }
+                }
+                // 未匹配的字段保留原样，可能后续有用
+                if (!matched) {
+                  mappedItem[trimmedKey] = value;
+                }
+              }
+            }
+
+            // 处理紧急程度的中文映射
+            if (mappedItem.urgency) {
+              const urgencyMap: Record<string, string> = {
+                '低': 'low', '中': 'medium', '高': 'high', '紧急': 'critical',
+                '低优先': 'low', '中优先': 'medium', '高优先': 'high',
+              };
+              if (urgencyMap[mappedItem.urgency]) {
+                mappedItem.urgency = urgencyMap[mappedItem.urgency];
+              }
+            }
+
+            // 处理需求人数的类型转换
+            if (mappedItem.requiredCount && typeof mappedItem.requiredCount === 'string') {
+              const parsed = parseInt(mappedItem.requiredCount, 10);
+              if (!isNaN(parsed)) mappedItem.requiredCount = parsed;
+            }
+
+            // 检查是否已存在（按需求编号去重）
+            if (mappedItem.requirementNumber && projectId) {
+              const existing = await this.positionRepository.findOne({
+                where: { requirementNumber: mappedItem.requirementNumber, projectId },
+              });
+              if (existing) {
+                // 覆盖更新
+                Object.assign(existing, mappedItem);
+                await this.positionRepository.save(existing);
+                updatedCount++;
+                successCount++;
+                continue;
+              }
+            }
+
             const position = this.positionRepository.create({
-              systemName: item.systemName || '未指定',
-              department: item.department || '未指定',
-              positionDuty: item.positionDuty || '未指定',
-              positionType: item.positionType || '未指定',
-              techDomain: item.techDomain || '未指定',
-              majorType: item.majorType || '未指定',
-              levelDistribution: item.levelDistribution || '未指定',
-              salaryRange: item.salaryRange || null,
-              requirements: item.requirements || '待补充',
-              responsibilities: item.responsibilities || '待补充',
-              domainExperience: item.domainExperience || '待补充',
-              region: item.region || '未指定',
-              deliveryForm: item.deliveryForm || '未指定',
-              urgency: item.urgency || 'medium',
-              requiredCount: item.requiredCount || 1,
-              requirementNumber: `REQ-${Date.now()}-${i}`,
-              projectId: args.projectId,
+              systemName: mappedItem.systemName || '未指定',
+              department: mappedItem.department || '未指定',
+              positionDuty: mappedItem.positionDuty || '未指定',
+              positionType: mappedItem.positionType || '未指定',
+              techDomain: mappedItem.techDomain || '未指定',
+              majorType: mappedItem.majorType || '未指定',
+              levelDistribution: mappedItem.levelDistribution || '未指定',
+              salaryRange: mappedItem.salaryRange || null,
+              requirements: mappedItem.requirements || '待补充',
+              responsibilities: mappedItem.responsibilities || '待补充',
+              domainExperience: mappedItem.domainExperience || '待补充',
+              region: mappedItem.region || '未指定',
+              deliveryForm: mappedItem.deliveryForm || '未指定',
+              positionImplementation: mappedItem.positionImplementation || '',
+              urgency: mappedItem.urgency || 'medium',
+              requiredCount: mappedItem.requiredCount || 1,
+              expectedDate: convertExcelDate(mappedItem.expectedDate) as any,
+              requirementNumber: mappedItem.requirementNumber || `REQ-${Date.now()}-${i}`,
+              projectId,
               creatorId: userId,
             });
             await this.positionRepository.save(position);
@@ -1304,7 +1508,8 @@ AI分析：候选人匹配分析、风险分析、生成报告
             errors.push(`第${i + 1}条导入失败: ${err.message || '未知错误'}`);
           }
         }
-        return { successCount, totalItems: items.length, errors, message: `成功导入${successCount}条岗位数据` };
+        const updatedMsg = updatedCount > 0 ? `，其中 ${updatedCount} 条为覆盖更新` : '';
+        return { successCount, updatedCount, totalItems: items.length, errors, message: `成功导入${successCount}条岗位数据${updatedMsg}` };
       }
       // ===== Candidate tools =====
       case 'list_candidates': {
@@ -1401,22 +1606,83 @@ AI分析：候选人匹配分析、风险分析、生成报告
         const items: any[] = args.items || [];
         let successCount = 0;
         const errors: string[] = [];
+
+        // 候选人字段映射表
+        const fieldAliases: Record<string, string> = {
+          '姓名': 'name', '名字': 'name', '候选人': 'name',
+          '性别': 'gender',
+          '证件类型': 'idType', '证件种类': 'idType',
+          '证件号码': 'idNumber', '身份证号': 'idNumber', '身份证': 'idNumber',
+          '联系电话': 'contactPhone', '电话': 'contactPhone', '手机': 'contactPhone', '手机号': 'contactPhone', '联系方式': 'contactPhone',
+          '联系邮箱': 'contactEmail', '邮箱': 'contactEmail', 'email': 'contactEmail', '电子邮件': 'contactEmail',
+          '区号': 'areaCode',
+          '学历类型': 'educationType', '学历性质': 'educationType',
+          '学历': 'education', '最高学历': 'education', '学位': 'education',
+          '领域年限': 'domainYears', '工作年限': 'domainYears', '经验年限': 'domainYears', '年限': 'domainYears',
+          '工作状态': 'workStatus', '在职状态': 'workStatus', '状态': 'workStatus',
+          '期望薪资': 'expectedSalary', '薪资': 'expectedSalary', '期望工资': 'expectedSalary',
+          '供应商': 'supplier', '推荐公司': 'supplier', '公司': 'supplier',
+          '推荐人': 'recommender', '推荐者': 'recommender',
+          '推荐理由': 'recommendReason', '推荐原因': 'recommendReason',
+        };
+
+        const standardFields = new Set([
+          'name', 'gender', 'idType', 'idNumber', 'contactPhone', 'contactEmail',
+          'areaCode', 'educationType', 'education', 'domainYears', 'workStatus',
+          'expectedSalary', 'supplier', 'recommender', 'recommendReason',
+        ]);
+
         for (let i = 0; i < items.length; i++) {
           try {
-            const item = items[i];
+            const rawItem = items[i];
+            // 智能字段映射
+            const mappedItem: Record<string, any> = {};
+            for (const [key, value] of Object.entries(rawItem)) {
+              if (value === null || value === undefined || value === '') continue;
+              const trimmedKey = key.trim();
+              if (standardFields.has(trimmedKey)) {
+                mappedItem[trimmedKey] = value;
+              } else if (fieldAliases[trimmedKey]) {
+                mappedItem[fieldAliases[trimmedKey]] = value;
+              } else {
+                const normalizedKey = trimmedKey.replace(/[\s_\-]/g, '').toLowerCase();
+                let matched = false;
+                for (const [alias, field] of Object.entries(fieldAliases)) {
+                  if (alias.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
+                    mappedItem[field] = value;
+                    matched = true;
+                    break;
+                  }
+                }
+                if (!matched) {
+                  for (const sf of standardFields) {
+                    if (sf.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
+                      mappedItem[sf] = value;
+                      matched = true;
+                      break;
+                    }
+                  }
+                }
+                if (!matched) {
+                  mappedItem[trimmedKey] = value;
+                }
+              }
+            }
+
             const candidate = this.candidateRepository.create({
-              name: item.name || '未命名',
-              gender: item.gender || '未提供',
-              idType: item.idType || '身份证',
-              idNumber: item.idNumber || '',
-              contactPhone: item.contactPhone || '',
-              contactEmail: item.contactEmail || '',
-              educationType: item.educationType || '统招',
-              education: item.education || '未提供',
-              domainYears: item.domainYears ? Number(item.domainYears) : null,
-              workStatus: item.workStatus || '未提供',
-              expectedSalary: item.expectedSalary || '未提供',
-              supplier: item.supplier || '未提供',
+              name: mappedItem.name || '未命名',
+              gender: mappedItem.gender || '未提供',
+              idType: mappedItem.idType || '身份证',
+              idNumber: mappedItem.idNumber || '',
+              contactPhone: mappedItem.contactPhone || '',
+              contactEmail: mappedItem.contactEmail || '',
+              educationType: mappedItem.educationType || '统招',
+              education: mappedItem.education || '未提供',
+              domainYears: mappedItem.domainYears ? Number(mappedItem.domainYears) : null,
+              workStatus: mappedItem.workStatus || '未提供',
+              expectedSalary: mappedItem.expectedSalary || '未提供',
+              supplier: mappedItem.supplier || '未提供',
+              graduationDate: convertExcelDate(mappedItem.graduationDate) as any,
             });
             await this.candidateRepository.save(candidate);
             successCount++;
@@ -1581,19 +1847,16 @@ AI分析：候选人匹配分析、风险分析、生成报告
         return { csv, count: candidates.length, message: `已生成${candidates.length}条候选人CSV数据` };
       }
       case 'upload_candidate_resume': {
-        const resumes: { candidateName: string; fileName: string; positionId?: number }[] = args.resumes || [];
+        const resumes: { candidateName: string; resumeUrl: string; positionId?: number }[] = args.resumes || [];
         const results: { candidateName: string; success: boolean; message: string }[] = [];
-        const fs = require('fs');
-        const path = require('path');
-        const uploadsDir = path.join(__dirname, '..', '..', 'uploads', 'resumes');
-
-        // 确保目录存在
-        if (!fs.existsSync(uploadsDir)) {
-          fs.mkdirSync(uploadsDir, { recursive: true });
-        }
 
         for (const resume of resumes) {
           try {
+            if (!resume.resumeUrl) {
+              results.push({ candidateName: resume.candidateName, success: false, message: '缺少简历文件路径' });
+              continue;
+            }
+
             // 按姓名搜索候选人
             const candidates = await this.candidateRepository
               .createQueryBuilder('c')
@@ -1607,31 +1870,25 @@ AI分析：候选人匹配分析、风险分析、生成报告
 
             // 取第一个匹配的候选人
             const candidate = candidates[0];
+            const oldResumeUrl = candidate.resumeUrl;
 
-            // 生成简历文件URL（基于文件名）
-            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-            const ext = resume.fileName.split('.').pop() || 'pdf';
-            const savedFileName = `${uniqueSuffix}-${resume.candidateName}.${ext}`;
-            const resumeUrl = `/uploads/resumes/${savedFileName}`;
-
-            // 更新候选人简历链接
-            candidate.resumeUrl = resumeUrl;
+            // 更新候选人简历链接（使用已保存的文件路径）
+            candidate.resumeUrl = resume.resumeUrl;
             await this.candidateRepository.save(candidate);
 
-            // 如果指定了岗位，也更新candidate_position的resumeUrl
-            if (resume.positionId) {
-              const cp = await this.candidatePositionRepository.findOne({
-                where: { candidateId: candidate.id, positionId: resume.positionId },
-              });
-              if (cp) {
-                await this.candidatePositionRepository.save(cp);
-              }
+            // 同时更新该候选人在所有岗位关联中的简历链接
+            const cps = await this.candidatePositionRepository.find({
+              where: { candidateId: candidate.id },
+            });
+            for (const cp of cps) {
+              cp.resumeUrl = resume.resumeUrl;
+              await this.candidatePositionRepository.save(cp);
             }
 
             results.push({
               candidateName: resume.candidateName,
               success: true,
-              message: `已为候选人「${candidate.name}」上传简历（${candidate.resumeUrl ? '覆盖旧简历' : '新上传'}）`
+              message: `已为候选人「${candidate.name}」上传简历${oldResumeUrl ? '（覆盖旧简历）' : ''}，简历路径: ${resume.resumeUrl}`
             });
           } catch (err: any) {
             results.push({ candidateName: resume.candidateName, success: false, message: err.message || '上传失败' });

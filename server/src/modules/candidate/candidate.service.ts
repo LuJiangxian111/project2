@@ -9,6 +9,25 @@ import { AiService } from '../ai/ai.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { NoticeService } from '../notice/notice.service';
 
+// 将Excel日期序列号转换为正常日期字符串
+function convertExcelDate(value: any): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const str = String(value).trim();
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
+    return str.replace(/\//g, '-').substring(0, 10);
+  }
+  const num = Number(str);
+  if (!isNaN(num) && num > 1000 && num < 100000) {
+    const epoch = new Date(1899, 11, 30);
+    const date = new Date(epoch.getTime() + num * 86400000);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return null;
+}
+
 const STATUS_LABELS: Record<string, string> = {
   pending_screen: '待筛选',
   screen_rejected: '筛选不通过',
@@ -233,6 +252,10 @@ export class CandidateService {
   }
 
   async create(data: Partial<Candidate>, userId: number) {
+    // 处理Excel日期序列号
+    if ((data as any).graduationDate) {
+      (data as any).graduationDate = convertExcelDate((data as any).graduationDate) as any;
+    }
     const candidate = this.candidateRepository.create(data);
     const result = await this.candidateRepository.save(candidate);
     await this.logService.log(userId, 'create', 'candidate', result.id, {
@@ -267,7 +290,17 @@ export class CandidateService {
     return { message: '删除成功' };
   }
 
-  async findCandidatesWithResume(projectId?: number, positionId?: number) {
+  async findCandidatesWithResume(projectId?: number, positionId?: number, candidateIds?: number[]) {
+    if (candidateIds && candidateIds.length > 0) {
+      // 按候选人ID列表筛选
+      const candidates = await this.candidateRepository.find({
+        where: candidateIds.map(id => ({ id })),
+      });
+      return candidates
+        .filter(c => c.resumeUrl)
+        .map(c => ({ id: c.id, name: c.name, resumeUrl: c.resumeUrl }));
+    }
+
     if (positionId) {
       // 按岗位筛选：从 candidate_positions 获取候选人，同时获取候选人自身的 resumeUrl 和关联的 resumeUrl
       const cps = await this.candidatePositionRepository.find({

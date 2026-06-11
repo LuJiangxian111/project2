@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, Input, Select, Button, Tag, Space, Spin, Empty, Modal, Form, message, Table, Upload, Steps, Checkbox, Tooltip } from 'antd';
-import { SearchOutlined, PlusOutlined, DollarOutlined, TeamOutlined, ClockCircleOutlined, EnvironmentOutlined, ImportOutlined, UploadOutlined, CheckOutlined, EditOutlined } from '@ant-design/icons';
-import { getPositions, createPosition, batchImportPositions, batchUpdatePositions } from '../api/position';
+import { SearchOutlined, PlusOutlined, DollarOutlined, TeamOutlined, ClockCircleOutlined, EnvironmentOutlined, ImportOutlined, UploadOutlined, CheckOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { getPositions, createPosition, batchImportPositions, batchUpdatePositions, batchDeletePositions } from '../api/position';
 import { getProjects } from '../api/project';
 import { analyzeFile } from '../api/ai';
 import { useUserStore } from '../stores/user';
@@ -256,6 +256,32 @@ export default function PositionMarket() {
     }
   };
 
+  const handleBatchDelete = () => {
+    if (selectedIds.length === 0) {
+      message.warning('请先选择要删除的岗位');
+      return;
+    }
+    Modal.confirm({
+      title: '确认删除',
+      content: `确定要删除选中的 ${selectedIds.length} 个岗位吗？此操作不可撤销。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          const res: any = await batchDeletePositions(selectedIds);
+          const result = res.data || res;
+          message.success(result.message || `批量删除完成：成功 ${result.success} 条，失败 ${result.failed} 条`);
+          setSelectedIds([]);
+          setBatchMode(false);
+          loadData();
+        } catch (err: any) {
+          message.error(err?.message || '批量删除失败');
+        }
+      },
+    });
+  };
+
   // 预览表格列
   const previewColumns = IMPORT_FIELDS.map((field) => ({
     title: FIELD_LABELS[field] || field,
@@ -337,6 +363,11 @@ export default function PositionMarket() {
           {batchMode && selectedIds.length > 0 && (
             <Button type="primary" onClick={() => { batchForm.resetFields(); setBatchEditOpen(true); }}>
               编辑已选 ({selectedIds.length})
+            </Button>
+          )}
+          {batchMode && selectedIds.length > 0 && (
+            <Button danger icon={<DeleteOutlined />} onClick={handleBatchDelete}>
+              删除已选 ({selectedIds.length})
             </Button>
           )}
           {batchMode && (

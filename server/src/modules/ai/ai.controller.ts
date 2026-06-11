@@ -5,6 +5,7 @@ import {
   UseGuards,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
 } from '@nestjs/common';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -199,7 +200,7 @@ export class AiController {
   @Post('agent-chat-with-file')
   @UseInterceptors(FilesInterceptor('files', 10, { limits: { fileSize: 50 * 1024 * 1024 } }))
   async agentChatWithFile(
-    @UploadedFile() files: Express.Multer.File[],
+    @UploadedFiles() files: Express.Multer.File[],
     @Body() body: { messages?: string },
     @CurrentUser() user: any,
   ) {
@@ -208,29 +209,58 @@ export class AiController {
       messages = body.messages ? JSON.parse(body.messages) : [];
     } catch { /* ignore */ }
 
-    // Parse all files content
+    const fs = require('fs');
+    const path = require('path');
+    const uploadsDir = path.join(__dirname, '..', '..', '..', 'uploads', 'resumes');
+    if (!fs.existsSync(uploadsDir)) {
+      fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+
+    // Parse all files content and save to disk
+    const savedFiles: { fileName: string; savedUrl: string; size: number }[] = [];
     if (files && files.length > 0) {
       const fileInfos: string[] = [];
       for (const file of files) {
         let fileContent = '';
         const fileName = Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8');
+        const ext = (file.originalname || '').split('.').pop()?.toLowerCase() || 'bin';
+
+        // 保存文件到磁盘
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const savedFileName = `${uniqueSuffix}.${ext}`;
+        const savedPath = path.join(uploadsDir, savedFileName);
+        const savedUrl = `/uploads/resumes/${savedFileName}`;
+
         if (file.buffer) {
-          const ext = (file.originalname || '').split('.').pop()?.toLowerCase();
+          fs.writeFileSync(savedPath, file.buffer);
+          savedFiles.push({ fileName, savedUrl, size: file.buffer.length });
+
           if (ext === 'xlsx' || ext === 'xls') {
             const XLSX = require('xlsx');
             const workbook = XLSX.read(file.buffer, { type: 'buffer', codepage: 65001 });
-            const sheetName = workbook.SheetNames[0];
-            const sheet = workbook.Sheets[sheetName];
-            const jsonData: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-            fileContent = jsonData.map(row => row.join(',')).join('\n');
+            // 读取所有工作表
+            const allSheetsInfo: string[] = [];
+            for (const sheetName of workbook.SheetNames) {
+              const sheet = workbook.Sheets[sheetName];
+              const jsonData: Record<string, string>[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+              if (jsonData.length === 0) continue;
+              const headers = Object.keys(jsonData[0]);
+              allSheetsInfo.push(`工作表"${sheetName}" (${jsonData.length}行数据):\n表头: ${headers.join(' | ')}\n数据(JSON):\n${JSON.stringify(jsonData, null, 2)}`);
+            }
+            fileContent = allSheetsInfo.join('\n\n');
+          } else if (ext === 'pdf' || ext === 'doc' || ext === 'docx') {
+            fileContent = `[${ext.toUpperCase()}文件，文件名: ${fileName}，大小: ${(file.buffer.length / 1024).toFixed(1)}KB，已保存到: ${savedUrl}]`;
           } else {
             fileContent = file.buffer.toString('utf-8');
           }
+        } else {
+          savedFiles.push({ fileName, savedUrl: '', size: 0 });
         }
-        fileInfos.push(`--- 文件"${fileName}" ---\n${fileContent.substring(0, 30000)}`);
+        fileInfos.push(`--- 文件"${fileName}" ---\n${fileContent.substring(0, 100000)}`);
       }
 
-      const fileInfoMsg = `用户上传了${files.length}个文件：\n${fileInfos.join('\n\n')}\n\n请根据文件内容和用户的要求执行操作。`;
+      const savedFilesInfo = savedFiles.map(f => `文件名: ${f.fileName}, 保存路径: ${f.savedUrl}`).join('\n');
+      const fileInfoMsg = `用户上传了${files.length}个文件：\n${fileInfos.join('\n\n')}\n\n已保存的文件信息：\n${savedFilesInfo}\n\n请根据文件内容和用户的要求执行操作。如果需要为候选人上传简历，请使用upload_candidate_resume工具，resumeUrl字段使用上面提供的保存路径。`;
       if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
         messages[messages.length - 1].content += '\n\n' + fileInfoMsg;
       } else {
@@ -238,14 +268,14 @@ export class AiController {
       }
     }
 
-    return this.aiService.agentChat(messages, user.id);
+    return this.aiService.agentChat(messages, user.id, savedFiles);
   }
 
   @Post('parse-resume')
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: join(__dirname, '..', '..', 'uploads'),
+        destination: join(__dirname, '..', '..', '..', 'uploads'),
         filename: (_req, file, cb) => {
           const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
           cb(null, uniqueSuffix + '-' + file.originalname);
@@ -293,7 +323,7 @@ export class AiController {
   @UseInterceptors(
     FileInterceptor('file', {
       storage: diskStorage({
-        destination: join(__dirname, '..', '..', 'uploads'),
+        destination: join(__dirname, '..', '..', '..', 'uploads'),
         filename: (_req, file, cb) => {
           const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
           cb(null, uniqueSuffix + '-' + file.originalname);

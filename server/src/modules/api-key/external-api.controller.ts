@@ -11,6 +11,7 @@ import {
   Request,
   UseInterceptors,
   UploadedFile,
+  UploadedFiles,
   Inject,
 } from '@nestjs/common';
 import { ApiKeyGuard } from '../../common/guards/api-key.guard';
@@ -210,7 +211,7 @@ export class ExternalApiController {
   @Post('ai/agent-chat-with-file')
   @UseInterceptors(FilesInterceptor('files', 10, { limits: { fileSize: 50 * 1024 * 1024 } }))
   async aiAgentChatWithFile(
-    @UploadedFile() files: Express.Multer.File[],
+    @UploadedFiles() files: Express.Multer.File[],
     @Body() body: { messages?: string },
     @Request() req: any,
   ) {

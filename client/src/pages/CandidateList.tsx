@@ -137,6 +137,14 @@ export default function CandidateList() {
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
 
+  // 导出简历弹窗状态
+  const [resumeExportOpen, setResumeExportOpen] = useState(false);
+  const [resumeExportProjectId, setResumeExportProjectId] = useState<number | undefined>();
+  const [resumeExportPositionId, setResumeExportPositionId] = useState<number | undefined>();
+  const [resumeExportCandidates, setResumeExportCandidates] = useState<any[]>([]);
+  const [resumeExportSelected, setResumeExportSelected] = useState<number[]>([]);
+  const [resumeExportLoading, setResumeExportLoading] = useState(false);
+
   useEffect(() => {
     const saved = loadSavedFields();
     setExportFields(saved.fields);
@@ -308,12 +316,44 @@ export default function CandidateList() {
     URL.revokeObjectURL(url);
   };
 
+  // 打开导出简历弹窗，从当前列表筛选有简历的候选人
+  const openResumeExport = () => {
+    setResumeExportOpen(true);
+    setResumeExportProjectId(undefined);
+    setResumeExportPositionId(undefined);
+    setResumeExportSelected([]);
+    // 从当前候选人列表中筛选有简历的
+    const candidatesWithResume: any[] = [];
+    const seenIds = new Set<number>();
+    groups.forEach(g => {
+      const resumeUrl = g.resumeUrl || g.positions?.find((p: any) => p.resumeUrl)?.resumeUrl;
+      if (resumeUrl && g.candidateIds?.length) {
+        const cid = g.candidateIds[0];
+        if (!seenIds.has(cid)) {
+          seenIds.add(cid);
+          candidatesWithResume.push({
+            id: cid,
+            name: g.name,
+            resumeUrl,
+            positions: g.positions,
+          });
+        }
+      }
+    });
+    setResumeExportCandidates(candidatesWithResume);
+  };
+
   const handleExportResumes = async () => {
+    if (resumeExportSelected.length === 0) {
+      message.warning('请选择要导出的候选人');
+      return;
+    }
     try {
       message.loading({ content: '正在打包简历文件...', key: 'exportResumes', duration: 0 });
       const params = new URLSearchParams();
-      if (filterProjectId) params.append('projectId', String(filterProjectId));
-      if (filterPositionId) params.append('positionId', String(filterPositionId));
+      params.append('candidateIds', resumeExportSelected.join(','));
+      if (resumeExportProjectId) params.append('projectId', String(resumeExportProjectId));
+      if (resumeExportPositionId) params.append('positionId', String(resumeExportPositionId));
       const token = localStorage.getItem('token');
       const res = await fetch(`/api/candidates/export-resumes?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -331,6 +371,7 @@ export default function CandidateList() {
       link.click();
       URL.revokeObjectURL(url);
       message.success({ content: '简历文件导出成功', key: 'exportResumes' });
+      setResumeExportOpen(false);
     } catch {
       message.error({ content: '导出简历文件失败', key: 'exportResumes' });
     }
@@ -381,10 +422,85 @@ export default function CandidateList() {
         <Button icon={<ExportOutlined />} onClick={handleExportCSV} disabled={groups.length === 0}>
           导出CSV
         </Button>
-        <Button icon={<ExportOutlined />} onClick={handleExportResumes} disabled={groups.length === 0}>
+        <Button icon={<ExportOutlined />} onClick={openResumeExport} disabled={groups.length === 0}>
           导出简历文件
         </Button>
       </div>
+
+      {/* 导出简历文件弹窗 */}
+      <Modal
+        title="导出简历文件"
+        open={resumeExportOpen}
+        onCancel={() => setResumeExportOpen(false)}
+        width={680}
+        footer={[
+          <Button key="cancel" onClick={() => setResumeExportOpen(false)}>取消</Button>,
+          <Button key="export" type="primary" onClick={handleExportResumes} disabled={resumeExportSelected.length === 0}>
+            导出选中 ({resumeExportSelected.length})
+          </Button>,
+        ]}
+      >
+        <div style={{ marginBottom: 12, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <Select
+            placeholder="筛选项目"
+            value={resumeExportProjectId}
+            onChange={(v) => { setResumeExportProjectId(v); setResumeExportPositionId(undefined); }}
+            allowClear
+            style={{ width: 160 }}
+            options={projects.map((p: any) => ({ value: p.id, label: p.name }))}
+          />
+          <Select
+            placeholder="筛选岗位"
+            value={resumeExportPositionId}
+            onChange={setResumeExportPositionId}
+            allowClear
+            style={{ width: 180 }}
+            options={positions
+              .filter((p: any) => !resumeExportProjectId || p.projectId === resumeExportProjectId)
+              .map((p: any) => ({ value: p.id, label: p.positionDuty }))}
+          />
+        </div>
+        <div style={{ marginBottom: 8, fontSize: 13, color: '#888' }}>
+          勾选要导出简历的候选人（仅显示有简历的候选人）
+        </div>
+        <Spin spinning={resumeExportLoading}>
+          <div style={{ maxHeight: 400, overflow: 'auto', border: '1px solid #f0f0f0', borderRadius: 6 }}>
+            <Checkbox
+              style={{ padding: '8px 12px', borderBottom: '1px solid #f0f0f0', display: 'block', background: '#fafafa' }}
+              checked={resumeExportSelected.length === resumeExportCandidates.length && resumeExportCandidates.length > 0}
+              indeterminate={resumeExportSelected.length > 0 && resumeExportSelected.length < resumeExportCandidates.length}
+              onChange={(e) => setResumeExportSelected(e.target.checked ? resumeExportCandidates.map((c: any) => c.id) : [])}
+            >
+              全选 ({resumeExportCandidates.length} 人)
+            </Checkbox>
+            {resumeExportCandidates
+              .filter((c: any) => {
+                if (resumeExportProjectId && c.projectId && c.projectId !== resumeExportProjectId) return false;
+                if (resumeExportPositionId && c.positionId && c.positionId !== resumeExportPositionId) return false;
+                return true;
+              })
+              .map((c: any) => (
+                <div key={c.id} style={{ padding: '6px 12px', borderBottom: '1px solid #f5f5f5', display: 'flex', alignItems: 'center' }}>
+                  <Checkbox
+                    checked={resumeExportSelected.includes(c.id)}
+                    onChange={(e) => {
+                      setResumeExportSelected(prev =>
+                        e.target.checked ? [...prev, c.id] : prev.filter(id => id !== c.id)
+                      );
+                    }}
+                  >
+                    <span style={{ fontWeight: 500 }}>{c.name}</span>
+                    {c.positionTitle && <span style={{ color: '#888', marginLeft: 8 }}>- {c.positionTitle}</span>}
+                    {c.projectName && <span style={{ color: '#aaa', marginLeft: 8 }}>({c.projectName})</span>}
+                  </Checkbox>
+                </div>
+              ))}
+            {resumeExportCandidates.length === 0 && !resumeExportLoading && (
+              <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>暂无有简历的候选人</div>
+            )}
+          </div>
+        </Spin>
+      </Modal>
 
       {/* 导出配置弹窗 */}
       <Modal

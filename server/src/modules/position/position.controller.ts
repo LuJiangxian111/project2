@@ -111,6 +111,14 @@ export class PositionController {
     return this.positionService.batchUpdate(body.ids, body.data, user.id);
   }
 
+  @Post('batch-delete')
+  async batchDelete(
+    @Body() body: { ids: number[] },
+    @CurrentUser() user: any,
+  ) {
+    return this.positionService.batchDelete(body.ids, user.id);
+  }
+
   @Put(':id')
   async update(
     @Param('id', ParseIntPipe) id: number,

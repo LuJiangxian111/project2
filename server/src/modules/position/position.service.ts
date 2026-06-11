@@ -8,6 +8,25 @@ import { LogService } from '../log/log.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { NoticeService } from '../notice/notice.service';
 
+// 将Excel日期序列号转换为正常日期字符串
+function convertExcelDate(value: any): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  const str = String(value).trim();
+  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
+    return str.replace(/\//g, '-').substring(0, 10);
+  }
+  const num = Number(str);
+  if (!isNaN(num) && num > 1000 && num < 100000) {
+    const epoch = new Date(1899, 11, 30);
+    const date = new Date(epoch.getTime() + num * 86400000);
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return null;
+}
+
 @Injectable()
 export class PositionService {
   constructor(
@@ -148,6 +167,9 @@ export class PositionService {
         // 空字符串的日期字段转为 null，避免 MySQL 报错
         if (key === 'expectedDate' && (mapped[key] === '' || mapped[key] === null)) {
           cleaned[key] = null;
+        } else if (key === 'expectedDate') {
+          // 处理Excel日期序列号
+          cleaned[key] = convertExcelDate(mapped[key]);
         } else {
           cleaned[key] = mapped[key];
         }
@@ -268,6 +290,29 @@ export class PositionService {
     return { message: '删除成功' };
   }
 
+  async batchDelete(ids: number[], userId: number) {
+    let success = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        const position = await this.positionRepository.findOne({ where: { id } });
+        if (position) {
+          await this.positionRepository.remove(position);
+          await this.logService.log(userId, 'batch_delete', 'position', id, {
+            positionDuty: position.positionDuty,
+          });
+          this.socketGateway.broadcastToAllUsers('position.deleted', { id });
+          success++;
+        } else {
+          failed++;
+        }
+      } catch {
+        failed++;
+      }
+    }
+    return { success, failed, total: ids.length, message: `批量删除完成：成功 ${success} 条，失败 ${failed} 条` };
+  }
+
   async addCandidate(
     positionId: number,
     candidateData: any,
@@ -290,6 +335,10 @@ export class PositionService {
         throw new NotFoundException('候选人不存在');
       }
     } else {
+      // 处理Excel日期序列号
+      if (candidateData.graduationDate) {
+        candidateData.graduationDate = convertExcelDate(candidateData.graduationDate);
+      }
       candidate = this.candidateRepository.create(candidateData) as unknown as Candidate;
       candidate = await this.candidateRepository.save(candidate);
     }

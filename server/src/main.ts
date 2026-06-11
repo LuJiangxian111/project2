@@ -33,7 +33,14 @@ async function bootstrap() {
   app.useGlobalInterceptors(new TransformInterceptor());
   app.useGlobalFilters(new HttpExceptionFilter());
 
-  app.use('/uploads', express.static(join(__dirname, '..', 'uploads')));
+  // 从 server/uploads 和 dist/uploads 两个目录提供静态文件（兼容不同保存路径）
+  const uploadsFromServer = join(__dirname, '..', 'uploads');
+  const uploadsFromDist = join(__dirname, 'uploads');
+  app.use('/uploads', (req: express.Request, res: express.Response, next: express.NextFunction) => {
+    express.static(uploadsFromServer)(req, res, () => {
+      express.static(uploadsFromDist)(req, res, next);
+    });
+  });
 
   const port = process.env.PORT || 3000;
   const host = process.env.HOST || '0.0.0.0';
