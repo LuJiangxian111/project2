@@ -1,12 +1,19 @@
-import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, In } from 'typeorm';
 import { Position } from '../../entities/position.entity';
 import { CandidatePosition } from '../../entities/candidate-position.entity';
 import { Candidate } from '../../entities/candidate.entity';
+import { Project } from '../../entities/project.entity';
+import { User } from '../../entities/user.entity';
 import { LogService } from '../log/log.service';
 import { SocketGateway } from '../socket/socket.gateway';
 import { NoticeService } from '../notice/notice.service';
+import { AiService } from '../ai/ai.service';
+import { DiscussionService } from '../discussion/discussion.service';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as archiver from 'archiver';
 
 // 将Excel日期序列号转换为正常日期字符串
 function convertExcelDate(value: any): string | null {
@@ -36,9 +43,16 @@ export class PositionService {
     private candidatePositionRepository: Repository<CandidatePosition>,
     @InjectRepository(Candidate)
     private candidateRepository: Repository<Candidate>,
+    @InjectRepository(Project)
+    private projectRepository: Repository<Project>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private logService: LogService,
     private socketGateway: SocketGateway,
     private noticeService: NoticeService,
+    private aiService: AiService,
+    @Inject(forwardRef(() => DiscussionService))
+    private discussionService: DiscussionService,
   ) {}
 
   async findAll(query?: {
@@ -343,16 +357,40 @@ export class PositionService {
       candidate = await this.candidateRepository.save(candidate);
     }
 
+    // 按姓名+电话同时匹配检查重复
     const existingCP = await this.candidatePositionRepository
       .createQueryBuilder('cp')
       .innerJoinAndSelect('cp.candidate', 'candidate')
       .where('cp.positionId = :positionId', { positionId })
       .andWhere('candidate.name = :name', { name: candidate.name })
+      .andWhere('candidate.contactPhone = :phone', { phone: candidate.contactPhone || '' })
       .getOne();
+
     if (existingCP) {
-      const phoneInfo = candidate.contactPhone ? `（电话: ${candidate.contactPhone}）` : '';
+      // 同一推荐人：覆盖更新
+      if (existingCP.recommenderId === userId) {
+        // 更新候选人信息
+        if (candidateData.resumeUrl) {
+          existingCP.resumeUrl = candidateData.resumeUrl;
+          candidate.resumeUrl = candidateData.resumeUrl;
+          await this.candidateRepository.save(candidate);
+        }
+        if (candidateData.recommender) existingCP.recommender = candidateData.recommender;
+        if (candidateData.recommendReason) existingCP.recommendReason = candidateData.recommendReason;
+        existingCP.recommendedAt = new Date();
+        existingCP.pushDate = new Date();
+        const result = await this.candidatePositionRepository.save(existingCP);
+        await this.logService.log(userId, 'update_candidate', 'position', positionId, {
+          candidateId: candidate.id,
+          candidateName: candidate.name,
+          action: '覆盖更新',
+        });
+        this.socketGateway.broadcastToAllUsers('candidate.updated', { positionId, candidateId: candidate.id, candidateName: candidate.name });
+        return result;
+      }
+      // 不同推荐人：报错
       throw new ConflictException(
-        `候选人"${candidate.name}"${phoneInfo}已推荐到该岗位，不可重复推荐`,
+        '该候选人已由其他用户推荐，不可重复推荐',
       );
     }
 
@@ -370,6 +408,7 @@ export class PositionService {
       recommenderId: userId,
       recommendReason: candidateData.recommendReason || '',
       implementation: positionWithImpl?.positionImplementation || '',
+      resumeUrl: candidateData.resumeUrl || candidate.resumeUrl || null,
     });
     const result = await this.candidatePositionRepository.save(cp);
     await this.logService.log(userId, 'add_candidate', 'position', positionId, {
@@ -385,6 +424,16 @@ export class PositionService {
         `${candidateData.recommender || '有人'}向您的岗位「${position.positionDuty}」推荐了候选人「${candidate.name}」`,
         position.creatorId,
       ).catch(() => {});
+    }
+
+    // 自动将推荐人加入项目讨论组
+    try {
+      const group = await this.discussionService.findByProject(position.projectId);
+      if (group) {
+        await this.discussionService.addMember(group.id, userId);
+      }
+    } catch (err) {
+      console.error('[Position] 添加讨论组成员失败:', err?.message || err);
     }
 
     return result;
@@ -435,5 +484,405 @@ export class PositionService {
       }
     }
     return results;
+  }
+
+  // ========== 简历库相关方法 ==========
+
+  // 获取岗位简历库列表
+  async getResumeLibrary(positionId: number) {
+    const position = await this.positionRepository.findOne({
+      where: { id: positionId },
+    });
+    if (!position) {
+      throw new NotFoundException('岗位不存在');
+    }
+
+    const candidatePositions = await this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .innerJoinAndSelect('cp.candidate', 'candidate')
+      .where('cp.positionId = :positionId', { positionId })
+      .orderBy('cp.recommendedAt', 'DESC')
+      .getMany();
+
+    return candidatePositions.map((cp) => ({
+      cpId: cp.id,
+      candidateId: cp.candidateId,
+      name: cp.candidate?.name || '未知',
+      contactPhone: cp.candidate?.contactPhone || '',
+      supplier: cp.candidate?.supplier || '',
+      status: cp.status,
+      resumeUrl: cp.resumeUrl || cp.candidate?.resumeUrl || null,
+      recommenderId: cp.recommenderId,
+      recommender: cp.recommender || '',
+      recommendedAt: cp.recommendedAt,
+    }));
+  }
+
+  // 上传简历文件并提取文本
+  async uploadResumeFile(file: Express.Multer.File) {
+    if (!file) {
+      throw new BadRequestException('请选择文件');
+    }
+
+    const url = `/uploads/resumes/${file.filename}`;
+    const originalName = Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8');
+
+    // 提取文本
+    let extractedText = '';
+    try {
+      const filePath = path.join(__dirname, '..', '..', '..', url.replace(/^\//, ''));
+      const ext = file.originalname.split('.').pop()?.toLowerCase();
+
+      if (ext === 'pdf') {
+        const pdfParse = require('pdf-parse');
+        const dataBuffer = fs.readFileSync(filePath);
+        const pdfData = await pdfParse(dataBuffer);
+        extractedText = pdfData.text || '';
+      } else if (ext === 'docx' || ext === 'doc') {
+        // Word文件暂无法直接提取文本
+        extractedText = '';
+      }
+    } catch (err) {
+      console.error('[Position] 提取简历文本失败:', err?.message || err);
+    }
+
+    return { url, fileName: originalName, extractedText };
+  }
+
+  // 智能上传简历：AI解析 + 匹配/创建候选人
+  async smartUploadResume(positionId: number, fileUrl: string, fileName: string, extractedText: string, userId: number) {
+    const position = await this.positionRepository.findOne({
+      where: { id: positionId },
+    });
+    if (!position) {
+      throw new NotFoundException('岗位不存在');
+    }
+
+    // 如果没有提取到文本，尝试从文件重新提取
+    if (!extractedText) {
+      try {
+        const filePath = path.join(__dirname, '..', '..', '..', fileUrl.replace(/^\//, ''));
+        if (fs.existsSync(filePath)) {
+          const ext = fileUrl.split('.').pop()?.toLowerCase();
+          if (ext === 'pdf') {
+            const pdfParse = require('pdf-parse');
+            const dataBuffer = fs.readFileSync(filePath);
+            const pdfData = await pdfParse(dataBuffer);
+            extractedText = pdfData.text || '';
+          }
+        }
+      } catch (err) {
+        console.error('[Position] 重新提取简历文本失败:', err?.message || err);
+      }
+    }
+
+    // 使用AI解析简历文本
+    let parsedInfo: any = {};
+    if (extractedText) {
+      try {
+        parsedInfo = await this.aiService.parseResume(extractedText, userId);
+      } catch (err) {
+        console.error('[Position] AI解析简历失败:', err?.message || err);
+      }
+    }
+
+    const candidateName = parsedInfo.name || fileName.replace(/\.[^.]+$/, '').replace(/[_\-]/g, ' ').trim();
+    const candidatePhone = parsedInfo.phone || '';
+
+    if (!candidateName) {
+      throw new BadRequestException('无法从简历中提取候选人姓名');
+    }
+
+    // 在该岗位下查找同名同电话的候选人
+    const existingCP = await this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .innerJoinAndSelect('cp.candidate', 'candidate')
+      .where('cp.positionId = :positionId', { positionId })
+      .andWhere('candidate.name = :name', { name: candidateName })
+      .andWhere('candidate.contactPhone = :phone', { phone: candidatePhone || '' })
+      .getOne();
+
+    if (existingCP) {
+      // 同一推荐人：覆盖更新简历
+      if (existingCP.recommenderId === userId) {
+        existingCP.resumeUrl = fileUrl;
+        existingCP.candidate.resumeUrl = fileUrl;
+        existingCP.candidate.resumeText = extractedText ? extractedText.substring(0, 30000) : existingCP.candidate.resumeText;
+        // 更新候选人信息
+        if (candidatePhone) existingCP.candidate.contactPhone = candidatePhone;
+        if (parsedInfo.email) existingCP.candidate.contactEmail = parsedInfo.email;
+        if (parsedInfo.education) existingCP.candidate.education = parsedInfo.education;
+        if (parsedInfo.yearsOfExperience) existingCP.candidate.domainYears = Number(parsedInfo.yearsOfExperience) || existingCP.candidate.domainYears;
+        await this.candidateRepository.save(existingCP.candidate);
+        existingCP.recommendedAt = new Date();
+        const result = await this.candidatePositionRepository.save(existingCP);
+        return {
+          action: 'updated',
+          candidateId: existingCP.candidateId,
+          cpId: existingCP.id,
+          name: existingCP.candidate.name,
+          phone: existingCP.candidate.contactPhone,
+          supplier: existingCP.candidate.supplier,
+          status: existingCP.status,
+          resumeUrl: fileUrl,
+          parsedInfo,
+        };
+      }
+      // 不同推荐人
+      throw new ConflictException('该候选人已由其他用户上传');
+    }
+
+    // 未找到匹配候选人，创建新候选人
+    const candidate = this.candidateRepository.create({
+      name: candidateName,
+      contactPhone: candidatePhone || '',
+      contactEmail: parsedInfo.email || '',
+      education: parsedInfo.education || '未提供',
+      domainYears: parsedInfo.yearsOfExperience ? Number(parsedInfo.yearsOfExperience) : null,
+      supplier: parsedInfo.currentCompany || '未提供',
+      resumeUrl: fileUrl,
+      resumeText: extractedText ? extractedText.substring(0, 30000) : null,
+      gender: '未提供',
+      idType: '身份证',
+      educationType: '统招',
+      workStatus: '未提供',
+      expectedSalary: '未提供',
+    });
+    const savedCandidate = await this.candidateRepository.save(candidate);
+
+    const positionWithImpl = await this.positionRepository.findOne({
+      where: { id: positionId },
+    });
+
+    const cp = this.candidatePositionRepository.create({
+      candidateId: savedCandidate.id,
+      positionId,
+      status: 'pending_screen',
+      recommendedAt: new Date(),
+      pushDate: new Date(),
+      recommender: '',
+      recommenderId: userId,
+      recommendReason: '简历库上传',
+      implementation: positionWithImpl?.positionImplementation || '',
+      resumeUrl: fileUrl,
+    });
+    const savedCp = await this.candidatePositionRepository.save(cp);
+
+    await this.logService.log(userId, 'smart_upload_resume', 'position', positionId, {
+      candidateId: savedCandidate.id,
+      candidateName: savedCandidate.name,
+      resumeUrl: fileUrl,
+    });
+    this.socketGateway.broadcastToAllUsers('candidate.added', { positionId, candidateId: savedCandidate.id, candidateName: savedCandidate.name });
+
+    // 通知岗位创建者
+    if (position.creatorId && position.creatorId !== userId) {
+      this.noticeService.createSystemNotice(
+        '新简历上传',
+        `有新简历上传到您的岗位「${position.positionDuty}」：候选人「${savedCandidate.name}」`,
+        position.creatorId,
+      ).catch(() => {});
+    }
+
+    // 自动将上传者加入项目讨论组
+    try {
+      const group = await this.discussionService.findByProject(position.projectId);
+      if (group) {
+        await this.discussionService.addMember(group.id, userId);
+      }
+    } catch (err) {
+      console.error('[Position] 添加讨论组成员失败:', err?.message || err);
+    }
+
+    return {
+      action: 'created',
+      candidateId: savedCandidate.id,
+      cpId: savedCp.id,
+      name: savedCandidate.name,
+      phone: savedCandidate.contactPhone,
+      supplier: savedCandidate.supplier,
+      status: savedCp.status,
+      resumeUrl: fileUrl,
+      parsedInfo,
+    };
+  }
+
+  // 批量导出简历为ZIP
+  async exportResumes(positionId: number, candidateIds: number[], res: any) {
+    const position = await this.positionRepository.findOne({
+      where: { id: positionId },
+    });
+    if (!position) {
+      throw new NotFoundException('岗位不存在');
+    }
+
+    // 查询候选人及其简历
+    const cps = await this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .innerJoinAndSelect('cp.candidate', 'candidate')
+      .where('cp.positionId = :positionId', { positionId })
+      .andWhere('cp.candidateId IN (:...candidateIds)', { candidateIds })
+      .getMany();
+
+    if (cps.length === 0) {
+      throw new NotFoundException('没有找到有简历的候选人');
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename=resumes_${position.positionDuty}_${Date.now()}.zip`);
+
+    const archive = (archiver as any)('zip', { zlib: { level: 5 } });
+    archive.pipe(res);
+
+    const uploadsDir = path.join(__dirname, '..', '..', '..', 'uploads');
+    let addedCount = 0;
+
+    for (const cp of cps) {
+      const resumeUrl = cp.resumeUrl || cp.candidate?.resumeUrl;
+      if (!resumeUrl) continue;
+
+      const filePath = path.join(uploadsDir, resumeUrl.replace('/uploads/', ''));
+      if (fs.existsSync(filePath)) {
+        const ext = filePath.split('.').pop();
+        const fileName = `${cp.candidate?.name || '未知'}_${cp.candidateId}.${ext}`;
+        archive.file(filePath, { name: fileName });
+        addedCount++;
+      }
+    }
+
+    if (addedCount === 0) {
+      throw new NotFoundException('简历文件不存在');
+    }
+
+    archive.finalize();
+  }
+
+  async getDashboardStats(projectId?: number) {
+    // 基础计数
+    const projectQb = this.projectRepository.createQueryBuilder('project');
+    if (projectId) {
+      projectQb.where('project.id = :projectId', { projectId });
+    }
+    const totalProjects = await projectQb.getCount();
+
+    const positionQb = this.positionRepository.createQueryBuilder('position');
+    if (projectId) {
+      positionQb.where('position.projectId = :projectId', { projectId });
+    }
+    const totalPositions = await positionQb.getCount();
+
+    const openPositionQb = this.positionRepository.createQueryBuilder('position');
+    if (projectId) {
+      openPositionQb.where('position.projectId = :projectId', { projectId });
+    }
+    openPositionQb.andWhere('position.status IN (:...statuses)', { statuses: ['open', 'partial'] });
+    const openPositions = await openPositionQb.getCount();
+
+    // 候选人总数和面试数 - 基于 candidate_positions
+    const cpQb = this.candidatePositionRepository.createQueryBuilder('cp');
+    if (projectId) {
+      cpQb.innerJoin('cp.position', 'position', 'position.projectId = :projectId', { projectId });
+    }
+    const totalCandidates = await cpQb.getCount();
+
+    const interviewQb = this.candidatePositionRepository.createQueryBuilder('cp');
+    if (projectId) {
+      interviewQb.innerJoin('cp.position', 'position', 'position.projectId = :projectId', { projectId });
+    }
+    interviewQb.andWhere('cp.status IN (:...statuses)', {
+      statuses: ['pending_interview', 'interview_passed', 'interview_rejected'],
+    });
+    const totalInterviews = await interviewQb.getCount();
+
+    // 筛选通过率: (screen_passed + pending_interview + interview_passed + interview_rejected + pending_onboard + onboarded) / total * 100
+    const screenPassQb = this.candidatePositionRepository.createQueryBuilder('cp');
+    if (projectId) {
+      screenPassQb.innerJoin('cp.position', 'position', 'position.projectId = :projectId', { projectId });
+    }
+    screenPassQb.andWhere('cp.status IN (:...statuses)', {
+      statuses: ['screen_passed', 'pending_interview', 'interview_passed', 'interview_rejected', 'pending_onboard', 'onboarded'],
+    });
+    const screenPassCount = await screenPassQb.getCount();
+    const screeningPassRate = totalCandidates > 0 ? Math.round((screenPassCount / totalCandidates) * 1000) / 10 : 0;
+
+    // 面试通过率: (interview_passed + pending_onboard + onboarded) / (interview_passed + interview_rejected + pending_onboard + onboarded) * 100
+    const interviewPassQb = this.candidatePositionRepository.createQueryBuilder('cp');
+    if (projectId) {
+      interviewPassQb.innerJoin('cp.position', 'position', 'position.projectId = :projectId', { projectId });
+    }
+    interviewPassQb.andWhere('cp.status IN (:...statuses)', {
+      statuses: ['interview_passed', 'pending_onboard', 'onboarded'],
+    });
+    const interviewPassCount = await interviewPassQb.getCount();
+
+    const interviewTotalQb = this.candidatePositionRepository.createQueryBuilder('cp');
+    if (projectId) {
+      interviewTotalQb.innerJoin('cp.position', 'position', 'position.projectId = :projectId', { projectId });
+    }
+    interviewTotalQb.andWhere('cp.status IN (:...statuses)', {
+      statuses: ['interview_passed', 'interview_rejected', 'pending_onboard', 'onboarded'],
+    });
+    const interviewTotalCount = await interviewTotalQb.getCount();
+    const interviewPassRate = interviewTotalCount > 0 ? Math.round((interviewPassCount / interviewTotalCount) * 1000) / 10 : 0;
+
+    // 最近活动日志
+    const activityQb = this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .leftJoinAndSelect('cp.candidate', 'candidate')
+      .leftJoinAndSelect('cp.position', 'position')
+      .leftJoinAndSelect('position.project', 'project')
+      .select([
+        'cp.id',
+        'cp.status',
+        'cp.recommendedAt',
+        'cp.recommender',
+        'cp.recommenderId',
+        'cp.implementation',
+        'candidate.id',
+        'candidate.name',
+        'position.id',
+        'position.positionDuty',
+        'position.positionImplementation',
+        'project.id',
+        'project.name',
+      ])
+      .orderBy('cp.recommendedAt', 'DESC')
+      .limit(20);
+
+    if (projectId) {
+      activityQb.andWhere('position.projectId = :projectId', { projectId });
+    }
+
+    const recentActivities = await activityQb.getMany();
+
+    // 获取上传者信息
+    const recommenderIds = [...new Set(recentActivities.map(a => a.recommenderId).filter(Boolean))];
+    let userMap = new Map<number, string>();
+    if (recommenderIds.length > 0) {
+      const users = await this.userRepository.findBy({ id: In(recommenderIds) });
+      users.forEach(u => userMap.set(u.id, u.nickname || u.name || u.username));
+    }
+
+    const activityLog = recentActivities.map(cp => ({
+      id: cp.id,
+      time: cp.recommendedAt,
+      recommenderName: cp.recommender || (cp.recommenderId ? userMap.get(cp.recommenderId) : null) || '未知',
+      projectName: (cp.position as any)?.project?.name || '未知项目',
+      positionDuty: (cp.position as any)?.positionDuty || '未知岗位',
+      positionImplementation: cp.implementation || (cp.position as any)?.positionImplementation || '',
+      candidateName: cp.candidate?.name || '未知',
+      status: cp.status,
+    }));
+
+    return {
+      totalProjects,
+      totalPositions,
+      openPositions,
+      totalCandidates,
+      totalInterviews,
+      screeningPassRate,
+      interviewPassRate,
+      recentActivities: activityLog,
+    };
   }
 }

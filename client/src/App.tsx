@@ -11,9 +11,12 @@ import PositionMarket from './pages/PositionMarket';
 import PositionDetail from './pages/PositionDetail';
 import CandidateList from './pages/CandidateList';
 import CandidateDetail from './pages/CandidateDetail';
+import InterviewSchedule from './pages/InterviewSchedule';
 import AIAssistant from './pages/AIAssistant';
+import DiscussionGroups from './pages/DiscussionGroups';
 import Settings from './pages/Settings';
 import Profile from './pages/Profile';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const MessageBoard = lazy(() => import('./pages/MessageBoard'));
 
@@ -59,8 +62,10 @@ export default function App() {
         <Route path="positions/:id" element={<PositionDetail />} />
         <Route path="candidates" element={<CandidateList />} />
         <Route path="candidates/:id" element={<CandidateDetail />} />
+        <Route path="interviews" element={<InterviewSchedule />} />
         <Route path="ai" element={<AIAssistant />} />
-        <Route path="message-board" element={<Suspense fallback={<div>加载中...</div>}><MessageBoard /></Suspense>} />
+        <Route path="discussions" element={<DiscussionGroups />} />
+        <Route path="message-board" element={<ErrorBoundary><Suspense fallback={<div>加载中...</div>}><MessageBoard /></Suspense></ErrorBoundary>} />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />
       </Route>

@@ -6,6 +6,7 @@ import {
   ProjectOutlined,
   ShopOutlined,
   TeamOutlined,
+  CalendarOutlined,
   RobotOutlined,
   SettingOutlined,
   UserOutlined,
@@ -16,9 +17,11 @@ import {
   PlusOutlined,
   DeleteOutlined,
   MessageOutlined,
+  CommentOutlined,
 } from '@ant-design/icons';
 import { useUserStore } from '../stores/user';
 import { getNotices, createNotice, deleteNotice } from '../api/notice';
+import ErrorBoundary from '../components/ErrorBoundary';
 
 const { Header, Sider, Content } = Layout;
 
@@ -27,6 +30,8 @@ const menuItems = [
   { key: '/projects', icon: <ProjectOutlined />, label: '项目管理' },
   { key: '/market', icon: <ShopOutlined />, label: '需求广场' },
   { key: '/candidates', icon: <TeamOutlined />, label: '候选人管理' },
+  { key: '/interviews', icon: <CalendarOutlined />, label: '面试安排' },
+  { key: '/discussions', icon: <CommentOutlined />, label: '讨论组' },
   { key: '/ai', icon: <RobotOutlined />, label: 'AI助手' },
   { key: '/message-board', icon: <MessageOutlined />, label: '留言板' },
   { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
@@ -37,8 +42,10 @@ const breadcrumbMap: Record<string, string> = {
   '/projects': '项目管理',
   '/market': '需求广场',
   '/candidates': '候选人管理',
+  '/interviews': '面试安排',
   '/ai': 'AI助手',
   '/message-board': '留言板',
+  '/discussions': '讨论组',
   '/settings': '系统设置',
   '/profile': '个人信息',
 };
@@ -65,16 +72,25 @@ export default function MainLayout() {
     try {
       setNoticeLoading(true);
       const res: any = await getNotices(user?.id);
-      const data = res.data || res || [];
-      data.sort((a: any, b: any) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+      let data = res.data || res || [];
+      if (!Array.isArray(data)) {
+        console.warn('getNotices returned non-array data:', data);
+        data = [];
+      }
+      try {
+        data.sort((a: any, b: any) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+      } catch (sortErr) {
+        console.error('sort notices error:', sortErr);
+      }
       setNotices(data);
       // 检测是否有新公告
       if (lastNoticeCountRef.current > 0 && data.length > lastNoticeCountRef.current) {
         setHasNewNotice(true);
       }
       lastNoticeCountRef.current = data.length;
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('loadNotices error:', err);
+      setNotices([]);
     } finally {
       setNoticeLoading(false);
     }
@@ -138,18 +154,18 @@ export default function MainLayout() {
           <List.Item
             style={{ padding: '8px 0', borderBottom: '1px solid #f0f0f0' }}
             actions={isAdmin ? [
-              <Popconfirm key="del" title="确定删除？" onConfirm={() => handleDeleteNotice(item.id)} okText="确定" cancelText="取消">
+              <Popconfirm key="del" title="确定删除？" onConfirm={() => handleDeleteNotice(item?.id)} okText="确定" cancelText="取消">
                 <Button type="text" danger size="small" icon={<DeleteOutlined />} />
               </Popconfirm>,
             ] : undefined}
           >
             <List.Item.Meta
-              title={<span style={{ fontSize: 14 }}>{item.title}</span>}
+              title={<span style={{ fontSize: 14 }}>{item?.title ?? '无标题'}</span>}
               description={
                 <div>
-                  <div style={{ color: '#595959', fontSize: 13, whiteSpace: 'pre-wrap', maxHeight: 60, overflow: 'hidden' }}>{item.content}</div>
+                  <div style={{ color: '#595959', fontSize: 13, whiteSpace: 'pre-wrap', maxHeight: 60, overflow: 'hidden' }}>{item?.content ?? ''}</div>
                   <div style={{ color: '#8c8c8c', fontSize: 12, marginTop: 4 }}>
-                    {item.authorName || item.author || '系统'} · {item.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN') : ''}
+                    {item?.authorName || item?.author?.name || item?.author?.nickname || (typeof item?.author === 'string' ? item.author : '') || '系统'} · {item?.createdAt ? new Date(item.createdAt).toLocaleString('zh-CN') : ''}
                   </div>
                 </div>
               }
@@ -278,17 +294,19 @@ export default function MainLayout() {
             />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <Popover
-              content={noticeContent}
-              trigger="click"
-              open={noticeOpen}
-              onOpenChange={handleNoticeOpenChange}
-              placement="bottomRight"
-            >
-              <Badge dot={hasNewNotice} offset={[-4, 4]} color="red">
-                <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} />
-              </Badge>
-            </Popover>
+            <ErrorBoundary>
+              <Popover
+                content={noticeContent}
+                trigger="click"
+                open={noticeOpen}
+                onOpenChange={handleNoticeOpenChange}
+                placement="bottomRight"
+              >
+                <Badge dot={hasNewNotice} offset={[-4, 4]} color="red">
+                  <BellOutlined style={{ fontSize: 18, cursor: 'pointer' }} />
+                </Badge>
+              </Popover>
+            </ErrorBoundary>
             <Dropdown menu={{ items: dropdownItems, onClick: handleDropdownClick }} placement="bottomRight">
               <div style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <Avatar

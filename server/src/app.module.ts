@@ -20,9 +20,12 @@ import { AuditLog } from './entities/audit-log.entity';
 import { ApiKey } from './entities/api-key.entity';
 import { Notice } from './entities/notice.entity';
 import { MessageBoard } from './entities/message-board.entity';
+import { DiscussionGroup } from './entities/discussion-group.entity';
+import { DiscussionMessage } from './entities/discussion-message.entity';
 import { ApiKeyModule } from './modules/api-key/api-key.module';
 import { NoticeModule } from './modules/notice/notice.module';
 import { MessageBoardModule } from './modules/message-board/message-board.module';
+import { DiscussionModule } from './modules/discussion/discussion.module';
 
 @Module({
   imports: [
@@ -47,6 +50,8 @@ import { MessageBoardModule } from './modules/message-board/message-board.module
         ApiKey,
         Notice,
         MessageBoard,
+        DiscussionGroup,
+        DiscussionMessage,
       ],
       synchronize: true,
       logging: process.env.NODE_ENV !== 'production',
@@ -63,6 +68,7 @@ import { MessageBoardModule } from './modules/message-board/message-board.module
     ApiKeyModule,
     NoticeModule,
     MessageBoardModule,
+    DiscussionModule,
   ],
 })
 export class AppModule {}

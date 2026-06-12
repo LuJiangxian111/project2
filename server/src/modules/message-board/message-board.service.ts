@@ -16,8 +16,13 @@ export class MessageBoardService {
     return this.messageBoardRepository.find({
       where: { visible: true, parentId: IsNull() },
       relations: ['replies'],
-      order: { createdAt: 'DESC' },
+      order: { pinned: 'DESC', createdAt: 'DESC' },
     });
+  }
+
+  async togglePin(id: number, pinned: boolean) {
+    await this.messageBoardRepository.update(id, { pinned });
+    return { id, pinned };
   }
 
   async create(data: Partial<MessageBoard>) {

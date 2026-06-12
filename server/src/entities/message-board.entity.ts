@@ -14,6 +14,9 @@ export class MessageBoard {
   @Column({ default: true })
   visible: boolean;
 
+  @Column({ default: false })
+  pinned: boolean;
+
   @Column({ name: 'user_id', nullable: true })
   userId: number;
 

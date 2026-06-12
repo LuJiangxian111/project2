@@ -7,6 +7,8 @@ import {
   UploadedFile,
   UploadedFiles,
 } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
 import { AiService } from './ai.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -14,6 +16,7 @@ import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 import { join } from 'path';
 import * as XLSX from 'xlsx';
+import { CandidatePosition } from '../../entities/candidate-position.entity';
 
 // 提取文件文本内容
 function extractFileContent(file: Express.Multer.File): string {
@@ -91,7 +94,11 @@ function parseFileToRows(file: Express.Multer.File): { headers: string[]; rows: 
 @Controller('ai')
 @UseGuards(JwtAuthGuard)
 export class AiController {
-  constructor(private aiService: AiService) {}
+  constructor(
+    private aiService: AiService,
+    @InjectRepository(CandidatePosition)
+    private candidatePositionRepository: Repository<CandidatePosition>,
+  ) {}
 
   @Post('chat')
   async chat(
@@ -296,11 +303,27 @@ export class AiController {
     @Body() body: { candidateId: number; positionId: number },
     @CurrentUser() user: any,
   ) {
-    return this.aiService.matchCandidate(
+    const result = await this.aiService.matchCandidate(
       { id: body.candidateId } as any,
       { id: body.positionId } as any,
       user.id,
     );
+
+    // 将匹配分数和详情更新到 candidate_position 记录
+    try {
+      const cp = await this.candidatePositionRepository.findOne({
+        where: { candidateId: body.candidateId, positionId: body.positionId },
+      });
+      if (cp) {
+        cp.matchScore = result.score;
+        cp.matchDetail = JSON.stringify(result.detail);
+        await this.candidatePositionRepository.save(cp);
+      }
+    } catch (err) {
+      console.error('[AI] 更新匹配分数失败:', err?.message || err);
+    }
+
+    return result;
   }
 
   @Post('generate-report')

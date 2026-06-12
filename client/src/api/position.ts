@@ -79,3 +79,27 @@ export const batchUpdatePositions = (ids: number[], data: Partial<any>) =>
 
 export const batchDeletePositions = (ids: number[]) =>
   request.post('/positions/batch-delete', { ids });
+
+export const getDashboardStats = (projectId?: number) =>
+  request.get('/positions/dashboard/stats', { params: { projectId } });
+
+// ========== 简历库 API ==========
+
+export const getResumeLibrary = (positionId: number) =>
+  request.get(`/positions/${positionId}/resume-library`);
+
+export const uploadResumeFile = (positionId: number, file: File) => {
+  const formData = new FormData();
+  formData.append('file', file);
+  return request.post(`/positions/${positionId}/resume-library/upload`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  });
+};
+
+export const smartUploadResume = (positionId: number, data: { fileUrl: string; fileName: string; extractedText?: string }) =>
+  request.post(`/positions/${positionId}/resume-library/smart-upload`, data);
+
+export const exportResumes = (positionId: number, candidateIds: number[]) =>
+  request.post(`/positions/${positionId}/resume-library/export`, { candidateIds }, {
+    responseType: 'blob',
+  });

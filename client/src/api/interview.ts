@@ -2,33 +2,23 @@ import request from './request';
 
 export interface Interview {
   id: number;
-  candidateId: number;
-  candidateName?: string;
-  positionId: number;
-  positionTitle?: string;
+  candidatePositionId: number;
   round: number;
-  interviewer?: string;
+  interviewerId?: number;
+  interviewType: string;
+  meetingLink?: string;
   scheduledAt?: string;
   result?: string;
   feedback?: string;
-  questions?: string;
-  status: string;
+  score?: number;
+  aiQuestions?: string;
   createdAt?: string;
-  updatedAt?: string;
+  candidatePosition?: any;
+  interviewer?: any;
 }
 
-export interface CreateInterviewParams {
-  candidateId: number;
-  positionId: number;
-  round?: number;
-  interviewer?: string;
-  scheduledAt?: string;
-  status?: string;
-}
-
-export const getInterviews = (params?: { status?: string; startDate?: string; endDate?: string }) =>
+export const getInterviews = (params?: { result?: string; projectId?: number; candidatePositionId?: number }) =>
   request.get('/interviews', { params });
-export const createInterview = (data: CreateInterviewParams) => request.post('/interviews', data);
-export const updateInterview = (id: number, data: Partial<CreateInterviewParams & { result?: string; feedback?: string }>) =>
-  request.put(`/interviews/${id}`, data);
+export const createInterview = (data: Partial<Interview>) => request.post('/interviews', data);
+export const updateInterview = (id: number, data: Partial<Interview>) => request.put(`/interviews/${id}`, data);
 export const generateQuestions = (id: number) => request.post(`/interviews/${id}/generate-questions`);

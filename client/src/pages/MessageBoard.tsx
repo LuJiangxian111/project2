@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Card, List, Modal, Form, Input, Button, message, Popconfirm } from 'antd';
-import { PlusOutlined, DeleteOutlined, MessageOutlined } from '@ant-design/icons';
-import { getMessages, createMessage, deleteMessage } from '../api/message-board';
+import { Card, List, Modal, Form, Input, Button, message, Popconfirm, Tag } from 'antd';
+import { PlusOutlined, DeleteOutlined, MessageOutlined, PushpinOutlined, PushpinFilled } from '@ant-design/icons';
+import { getMessages, createMessage, deleteMessage, togglePinMessage } from '../api/message-board';
 import { useUserStore } from '../stores/user';
 
 export default function MessageBoard() {
@@ -27,11 +27,17 @@ export default function MessageBoard() {
       setLoading(true);
       const res: any = await getMessages();
       const data = res.data || res || [];
-      data.sort((a: any, b: any) => new Date(b.createdAt || b.date).getTime() - new Date(a.createdAt || a.date).getTime());
+      if (!Array.isArray(data)) {
+        setMessages([]);
+        return;
+      }
+      // 后端已按 pinned DESC, createdAt DESC 排序，前端不再重排
       // 排序回复按时间正序
       data.forEach((msg: any) => {
-        if (msg.replies) {
-          msg.replies.sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        if (Array.isArray(msg.replies)) {
+          try {
+            msg.replies.sort((a: any, b: any) => new Date(a.createdAt || 0).getTime() - new Date(b.createdAt || 0).getTime());
+          } catch { /* sort failed */ }
         }
       });
       setMessages(data);
@@ -92,6 +98,16 @@ export default function MessageBoard() {
     }
   };
 
+  const handleTogglePin = async (id: number, pinned: boolean) => {
+    try {
+      await togglePinMessage(id, !pinned);
+      message.success(pinned ? '已取消置顶' : '已置顶');
+      loadMessages();
+    } catch (err: any) {
+      message.error(err.message || '操作失败');
+    }
+  };
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -107,13 +123,14 @@ export default function MessageBoard() {
         renderItem={(item: any) => (
           <List.Item style={{ marginBottom: 12 }}>
             <Card
-              style={{ width: '100%', borderRadius: 8 }}
+              style={{ width: '100%', borderRadius: 8, borderLeft: item.pinned ? '3px solid #faad14' : undefined }}
               styles={{ body: { padding: 20 } }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div style={{ flex: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <strong>{item.nickname || '匿名用户'}</strong>
+                    {item.pinned && <Tag color="gold" icon={<PushpinFilled />}>置顶</Tag>}
                   </div>
                   <div style={{ color: '#595959', marginBottom: 8, whiteSpace: 'pre-wrap' }}>{item.content}</div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -133,6 +150,17 @@ export default function MessageBoard() {
                       回复
                     </Button>
                     {isAdmin && (
+                      <Button
+                        type="link"
+                        size="small"
+                        icon={item.pinned ? <PushpinFilled /> : <PushpinOutlined />}
+                        style={{ padding: 0, fontSize: 13, color: item.pinned ? '#faad14' : undefined }}
+                        onClick={() => handleTogglePin(item.id, item.pinned)}
+                      >
+                        {item.pinned ? '取消置顶' : '置顶'}
+                      </Button>
+                    )}
+                    {isAdmin && (
                       <Popconfirm title="确定删除此留言？" onConfirm={() => handleDelete(item.id)} okText="确定" cancelText="取消">
                         <Button type="link" danger size="small" icon={<DeleteOutlined />} style={{ padding: 0, fontSize: 13 }}>
                           删除
@@ -144,7 +172,7 @@ export default function MessageBoard() {
               </div>
 
               {/* 回复列表 */}
-              {item.replies && item.replies.length > 0 && (
+              {Array.isArray(item.replies) && item.replies.length > 0 && (
                 <div style={{ marginTop: 12, paddingLeft: 16, borderLeft: '2px solid #f0f0f0' }}>
                   {item.replies.map((reply: any) => (
                     <div key={reply.id} style={{ marginBottom: 10 }}>

@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Descriptions, Table, Button, Space, Spin, message, Modal, Upload, Steps, Input, Tag, Checkbox, Form, Select, Row, Col, Divider, Popconfirm } from 'antd';
-import { ArrowLeftOutlined, RobotOutlined, PlusOutlined, ImportOutlined, UploadOutlined, SearchOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { getPosition, getPositionCandidates, addCandidateToPosition, batchImportCandidates, updatePosition } from '../api/position';
+import { Card, Descriptions, Table, Button, Space, Spin, message, Modal, Upload, Steps, Input, Tag, Checkbox, Form, Select, Row, Col, Divider, Popconfirm, Tabs } from 'antd';
+import { ArrowLeftOutlined, RobotOutlined, PlusOutlined, ImportOutlined, UploadOutlined, SearchOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, DownloadOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { getPosition, getPositionCandidates, addCandidateToPosition, batchImportCandidates, updatePosition, getResumeLibrary, uploadResumeFile, smartUploadResume, exportResumes } from '../api/position';
 import { matchAnalysis, analyzeFile } from '../api/ai';
 import { getCandidate } from '../api/candidate';
 import { getProjects } from '../api/project';
@@ -62,6 +62,14 @@ export default function PositionDetail() {
   const [selectedCpIds, setSelectedCpIds] = useState<number[]>([]);
   const [batchDeleting, setBatchDeleting] = useState(false);
 
+  // 简历库相关状态
+  const [activeTab, setActiveTab] = useState('detail');
+  const [resumeList, setResumeList] = useState<any[]>([]);
+  const [resumeLoading, setResumeLoading] = useState(false);
+  const [resumeUploading, setResumeUploading] = useState(false);
+  const [selectedResumeIds, setSelectedResumeIds] = useState<number[]>([]);
+  const [resumeExporting, setResumeExporting] = useState(false);
+
   // 查看候选人详情
   const handleViewCandidate = async (candidateId: number) => {
     try {
@@ -105,6 +113,104 @@ export default function PositionDetail() {
       message.error(err?.response?.data?.message || '批量移除失败');
     } finally {
       setBatchDeleting(false);
+    }
+  };
+
+  // ========== 简历库相关方法 ==========
+
+  // 加载简历库数据
+  const loadResumeLibrary = async () => {
+    try {
+      setResumeLoading(true);
+      const res: any = await getResumeLibrary(Number(id));
+      setResumeList(res.data || res || []);
+    } catch (err) {
+      console.error('加载简历库失败:', err);
+    } finally {
+      setResumeLoading(false);
+    }
+  };
+
+  // 上传简历到简历库
+  const handleResumeUpload = async (file: File) => {
+    try {
+      setResumeUploading(true);
+      // 第一步：上传文件
+      const uploadRes: any = await uploadResumeFile(Number(id), file);
+      const uploadData = uploadRes.data || uploadRes;
+      if (uploadData.code === 1 || !uploadData.url) {
+        message.error(uploadData.message || '文件上传失败');
+        return false;
+      }
+
+      // 第二步：调用智能上传接口
+      const smartRes: any = await smartUploadResume(Number(id), {
+        fileUrl: uploadData.url,
+        fileName: uploadData.fileName || file.name,
+        extractedText: uploadData.extractedText || '',
+      });
+      const smartData = smartRes.data || smartRes;
+
+      if (smartData.action === 'updated') {
+        message.success(`已更新候选人「${smartData.name}」的简历`);
+      } else if (smartData.action === 'created') {
+        message.success(`已创建新候选人「${smartData.name}」并关联简历`);
+      }
+
+      loadResumeLibrary();
+      loadData();
+      return false; // 阻止antd默认上传行为
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.message || err?.message || '上传失败';
+      message.error(errMsg);
+      return false;
+    } finally {
+      setResumeUploading(false);
+    }
+  };
+
+  // 更新候选人筛选状态
+  const handleScreenStatus = async (cpId: number, status: string) => {
+    try {
+      await request.put(`/positions/candidate-position/${cpId}/status`, { status });
+      message.success(status === 'screen_passed' ? '已标记为筛选通过' : '已标记为筛选不通过');
+      loadResumeLibrary();
+      loadData();
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '状态更新失败');
+    }
+  };
+
+  // 批量导出简历
+  const handleExportResumes = async () => {
+    if (selectedResumeIds.length === 0) {
+      message.warning('请先选择要导出的候选人');
+      return;
+    }
+    try {
+      setResumeExporting(true);
+      const res: any = await exportResumes(Number(id), selectedResumeIds);
+      // 创建下载链接
+      const blob = new Blob([res.data || res], { type: 'application/zip' });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `resumes_${Date.now()}.zip`;
+      link.click();
+      window.URL.revokeObjectURL(url);
+      message.success('导出成功');
+    } catch (err: any) {
+      message.error(err?.response?.data?.message || '导出失败');
+    } finally {
+      setResumeExporting(false);
+    }
+  };
+
+  // 切换标签页时加载数据
+  const handleTabChange = (key: string) => {
+    setActiveTab(key);
+    if (key === 'resume') {
+      loadResumeLibrary();
     }
   };
 
@@ -336,150 +442,296 @@ export default function PositionDetail() {
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />;
   if (!position) return <div>岗位不存在</div>;
 
+  // 简历库标签页内容
+  const renderResumeLibrary = () => (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Space>
+          <Upload
+            beforeUpload={(file) => {
+              handleResumeUpload(file);
+              return false;
+            }}
+            showUploadList={false}
+            accept=".pdf,.doc,.docx"
+          >
+            <Button type="primary" icon={<UploadOutlined />} loading={resumeUploading}>
+              上传简历
+            </Button>
+          </Upload>
+          {selectedResumeIds.length > 0 && (
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={handleExportResumes}
+              loading={resumeExporting}
+            >
+              导出选中简历 ({selectedResumeIds.length})
+            </Button>
+          )}
+        </Space>
+        <Tag color="blue">共 {resumeList.length} 位候选人</Tag>
+      </div>
+
+      {resumeLoading ? (
+        <Spin style={{ display: 'block', margin: '60px auto' }} />
+      ) : resumeList.length === 0 ? (
+        <div style={{ textAlign: 'center', color: '#999', padding: 60 }}>
+          <FilePdfOutlined style={{ fontSize: 48, marginBottom: 16, display: 'block' }} />
+          暂无简历，点击上方按钮上传
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
+          {resumeList.map((item: any) => (
+            <Card
+              key={item.cpId}
+              size="small"
+              hoverable
+              style={{
+                borderRadius: 8,
+                border: selectedResumeIds.includes(item.candidateId) ? '2px solid #1890ff' : undefined,
+              }}
+              onClick={() => {
+                setSelectedResumeIds(prev =>
+                  prev.includes(item.candidateId)
+                    ? prev.filter(i => i !== item.candidateId)
+                    : [...prev, item.candidateId]
+                );
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
+                    {item.name}
+                    <span style={{ marginLeft: 8 }}><StatusTag status={item.status} type="candidate" /></span>
+                  </div>
+                  <div style={{ color: '#666', fontSize: 13, marginBottom: 2 }}>
+                    📞 {item.contactPhone || '未提供'}
+                  </div>
+                  <div style={{ color: '#666', fontSize: 13, marginBottom: 2 }}>
+                    🏢 {item.supplier || '未提供'}
+                  </div>
+                  {item.recommender && (
+                    <div style={{ color: '#999', fontSize: 12 }}>
+                      推荐人: {item.recommender}
+                    </div>
+                  )}
+                </div>
+                <div>
+                  {item.resumeUrl ? (
+                    <a
+                      href={item.resumeUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ fontSize: 20, color: '#1890ff' }}
+                    >
+                      <FilePdfOutlined />
+                    </a>
+                  ) : (
+                    <span style={{ fontSize: 20, color: '#d9d9d9' }}>
+                      <FilePdfOutlined />
+                    </span>
+                  )}
+                </div>
+              </div>
+              <Divider style={{ margin: '8px 0' }} />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Space size="small">
+                  <Button
+                    size="small"
+                    type={item.status === 'screen_passed' ? 'primary' : 'default'}
+                    icon={<CheckCircleOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleScreenStatus(item.cpId, 'screen_passed');
+                    }}
+                    style={item.status === 'screen_passed' ? { background: '#52c41a', borderColor: '#52c41a' } : undefined}
+                  >
+                    筛选通过
+                  </Button>
+                  <Button
+                    size="small"
+                    danger={item.status === 'screen_rejected'}
+                    icon={<CloseCircleOutlined />}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleScreenStatus(item.cpId, 'screen_rejected');
+                    }}
+                  >
+                    筛选不通过
+                  </Button>
+                </Space>
+                {item.resumeUrl && (
+                  <a
+                    href={item.resumeUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    style={{ fontSize: 12 }}
+                  >
+                    查看简历
+                  </a>
+                )}
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div>
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)} style={{ marginBottom: 16 }}>
         返回
       </Button>
 
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
-        <Card
-          style={{ borderRadius: 8, flex: '1 1 400px', minWidth: 300 }}
-          extra={isCreator ? (
-            <Button icon={<EditOutlined />} onClick={handleEdit}>编辑</Button>
-          ) : null}
-        >
-          <Descriptions title={position.positionDuty} column={2}>
-            <Descriptions.Item label="系统">{position.systemName || '-'}</Descriptions.Item>
-            <Descriptions.Item label="部门">{position.department || '-'}</Descriptions.Item>
-            <Descriptions.Item label="需求编号">{position.requirementNumber || '-'}</Descriptions.Item>
-            <Descriptions.Item label="所属项目">{position.project?.name || '-'}</Descriptions.Item>
-            <Descriptions.Item label="岗位类型">{position.positionType || '-'}</Descriptions.Item>
-            <Descriptions.Item label="岗位职务">{position.positionDuty || '-'}</Descriptions.Item>
-            <Descriptions.Item label="技术领域">{position.techDomain || '-'}</Descriptions.Item>
-            <Descriptions.Item label="专业类型">{position.majorType || '-'}</Descriptions.Item>
-            <Descriptions.Item label="职级分布">{position.levelDistribution || '-'}</Descriptions.Item>
-            <Descriptions.Item label="薪资范围">{position.salaryRange || '面议'}</Descriptions.Item>
-            <Descriptions.Item label="地区">{position.region || '-'}</Descriptions.Item>
-            <Descriptions.Item label="交付形式">{position.deliveryForm || '-'}</Descriptions.Item>
-            <Descriptions.Item label="紧急程度">
-              {({ low: '低', medium: '中', high: '高', critical: '紧急' } as any)[position.urgency] || position.urgency}
-            </Descriptions.Item>
-            <Descriptions.Item label="状态"><StatusTag status={position.status} type="position" /></Descriptions.Item>
-            <Descriptions.Item label="需求/已推荐/已录用/缺口">
-              {position.requiredCount || 0} / {candidates.length} / {position.hiredCount || 0} / {Math.max(0, (position.requiredCount || 0) - (position.hiredCount || 0))}
-            </Descriptions.Item>
-            <Descriptions.Item label="期望到岗日期">
-              {position.expectedDate ? position.expectedDate.substring(0, 10) : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="岗位要求" span={2}>{position.requirements || '暂无'}</Descriptions.Item>
-            <Descriptions.Item label="岗位职责" span={2}>{position.responsibilities || '暂无'}</Descriptions.Item>
-            <Descriptions.Item label="领域经验" span={2}>{position.domainExperience || '暂无'}</Descriptions.Item>
-            <Descriptions.Item label="岗位实施" span={2}>{position.positionImplementation || '暂无'}</Descriptions.Item>
-            <Descriptions.Item label="创建者">{position.creator?.name || position.creator?.username || '-'}</Descriptions.Item>
-          </Descriptions>
-        </Card>
+      <Tabs activeKey={activeTab} onChange={handleTabChange} type="card" size="large">
+        <Tabs.TabPane tab="岗位详情" key="detail">
+          <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+            <Card
+              style={{ borderRadius: 8, flex: '1 1 400px', minWidth: 300 }}
+              extra={isCreator ? (
+                <Button icon={<EditOutlined />} onClick={handleEdit}>编辑</Button>
+              ) : null}
+            >
+              <Descriptions title={position.positionDuty} column={2}>
+                <Descriptions.Item label="系统">{position.systemName || '-'}</Descriptions.Item>
+                <Descriptions.Item label="部门">{position.department || '-'}</Descriptions.Item>
+                <Descriptions.Item label="需求编号">{position.requirementNumber || '-'}</Descriptions.Item>
+                <Descriptions.Item label="所属项目">{position.project?.name || '-'}</Descriptions.Item>
+                <Descriptions.Item label="岗位类型">{position.positionType || '-'}</Descriptions.Item>
+                <Descriptions.Item label="岗位职务">{position.positionDuty || '-'}</Descriptions.Item>
+                <Descriptions.Item label="技术领域">{position.techDomain || '-'}</Descriptions.Item>
+                <Descriptions.Item label="专业类型">{position.majorType || '-'}</Descriptions.Item>
+                <Descriptions.Item label="职级分布">{position.levelDistribution || '-'}</Descriptions.Item>
+                <Descriptions.Item label="薪资范围">{position.salaryRange || '面议'}</Descriptions.Item>
+                <Descriptions.Item label="地区">{position.region || '-'}</Descriptions.Item>
+                <Descriptions.Item label="交付形式">{position.deliveryForm || '-'}</Descriptions.Item>
+                <Descriptions.Item label="紧急程度">
+                  {({ low: '低', medium: '中', high: '高', critical: '紧急' } as any)[position.urgency] || position.urgency}
+                </Descriptions.Item>
+                <Descriptions.Item label="状态"><StatusTag status={position.status} type="position" /></Descriptions.Item>
+                <Descriptions.Item label="需求/已推荐/已录用/缺口">
+                  {position.requiredCount || 0} / {candidates.length} / {position.hiredCount || 0} / {Math.max(0, (position.requiredCount || 0) - (position.hiredCount || 0))}
+                </Descriptions.Item>
+                <Descriptions.Item label="期望到岗日期">
+                  {position.expectedDate ? position.expectedDate.substring(0, 10) : '-'}
+                </Descriptions.Item>
+                <Descriptions.Item label="岗位要求" span={2}>{position.requirements || '暂无'}</Descriptions.Item>
+                <Descriptions.Item label="岗位职责" span={2}>{position.responsibilities || '暂无'}</Descriptions.Item>
+                <Descriptions.Item label="领域经验" span={2}>{position.domainExperience || '暂无'}</Descriptions.Item>
+                <Descriptions.Item label="岗位实施" span={2}>{position.positionImplementation || '暂无'}</Descriptions.Item>
+                <Descriptions.Item label="创建者">{position.creator?.name || position.creator?.username || '-'}</Descriptions.Item>
+              </Descriptions>
+            </Card>
 
-        <Card
-          title="候选人列表"
-          style={{ borderRadius: 8, flex: '2 1 500px', minWidth: 400 }}
-          extra={
-            <Space>
-              {selectedCpIds.length > 0 && (
-                <Popconfirm
-                  title={`确定移除选中的 ${selectedCpIds.length} 个候选人？`}
-                  onConfirm={handleBatchRemove}
-                  okText="确定"
-                  cancelText="取消"
-                >
-                  <Button danger icon={<DeleteOutlined />} loading={batchDeleting}>
-                    批量移除 ({selectedCpIds.length})
-                  </Button>
-                </Popconfirm>
-              )}
-              <Button icon={<ImportOutlined />} onClick={() => { resetImportState(); setImportModalOpen(true); }}>
-                导入候选人
-              </Button>
-              <Button icon={<PlusOutlined />} onClick={() => setCandidateModalOpen(true)}>
-                新建候选人
-              </Button>
-              <Button onClick={async () => {
-                const { getCandidates } = await import('../api/candidate');
-                const res: any = await getCandidates();
-                setAllCandidates(res.data || res || []);
-                setAddExistingModalOpen(true);
-              }}>
-                添加已有候选人
-              </Button>
-              <Button icon={<RobotOutlined />} type="primary" loading={matching} onClick={() => message.info('AI匹配分析将对所有候选人执行')}>
-                AI匹配分析
-              </Button>
-            </Space>
-          }
-        >
-          <Table
-            dataSource={candidates}
-            rowKey={(r: any) => r.id}
-            pagination={false}
-            locale={{ emptyText: '暂无候选人' }}
-            rowSelection={{
-              selectedRowKeys: selectedCpIds,
-              onChange: (keys) => setSelectedCpIds(keys as number[]),
-            }}
-            columns={[
-              {
-                title: '姓名',
-                key: 'candidateName',
-                render: (_: any, record: any) => (
-                  <a onClick={() => handleViewCandidate(record.candidateId || record.id)}>
-                    {record.candidate?.name || record.candidateName || '-'}
-                  </a>
-                ),
-              },
-              {
-                title: '联系电话',
-                key: 'contactPhone',
-                render: (_: any, record: any) => record.candidate?.contactPhone || record.contactPhone || '-',
-              },
-              {
-                title: '供应商',
-                key: 'supplier',
-                render: (_: any, record: any) => record.candidate?.supplier || record.supplier || '-',
-              },
-              {
-                title: '匹配分数',
-                dataIndex: 'matchScore',
-                key: 'matchScore',
-                render: (v: number) => (v !== undefined && v !== null ? <MatchScoreTag score={v} /> : '-'),
-              },
-              {
-                title: '状态',
-                dataIndex: 'status',
-                key: 'status',
-                render: (v: string) => <StatusTag status={v} type="candidate" />,
-              },
-              {
-                title: '操作',
-                key: 'action',
-                render: (_: any, record: any) => (
-                  <Space>
-                    <a onClick={() => handleViewCandidate(record.candidateId || record.id)}>查看详情</a>
-                    <a onClick={() => handleAIMatch(record.candidateId || record.id)}>AI匹配</a>
+            <Card
+              title="候选人列表"
+              style={{ borderRadius: 8, flex: '2 1 500px', minWidth: 400 }}
+              extra={
+                <Space>
+                  {selectedCpIds.length > 0 && (
                     <Popconfirm
-                      title={`确定移除候选人「${record.candidate?.name || record.candidateName || ''}」？`}
-                      onConfirm={() => handleRemoveCandidate(record.id)}
+                      title={`确定移除选中的 ${selectedCpIds.length} 个候选人？`}
+                      onConfirm={handleBatchRemove}
                       okText="确定"
                       cancelText="取消"
                     >
-                      <a style={{ color: '#ff4d4f' }}>移除</a>
+                      <Button danger icon={<DeleteOutlined />} loading={batchDeleting}>
+                        批量移除 ({selectedCpIds.length})
+                      </Button>
                     </Popconfirm>
-                  </Space>
-                ),
-              },
-            ]}
-          />
-        </Card>
-      </div>
+                  )}
+                  <Button icon={<ImportOutlined />} onClick={() => { resetImportState(); setImportModalOpen(true); }}>
+                    导入候选人
+                  </Button>
+                  <Button icon={<PlusOutlined />} onClick={() => setCandidateModalOpen(true)}>
+                    新建候选人
+                  </Button>
+                  <Button onClick={async () => {
+                    const { getCandidates } = await import('../api/candidate');
+                    const res: any = await getCandidates();
+                    setAllCandidates(res.data || res || []);
+                    setAddExistingModalOpen(true);
+                  }}>
+                    添加已有候选人
+                  </Button>
+                  <Button icon={<RobotOutlined />} type="primary" loading={matching} onClick={() => message.info('AI匹配分析将对所有候选人执行')}>
+                    AI匹配分析
+                  </Button>
+                </Space>
+              }
+            >
+              <Table
+                dataSource={candidates}
+                rowKey={(r: any) => r.id}
+                pagination={false}
+                locale={{ emptyText: '暂无候选人' }}
+                rowSelection={{
+                  selectedRowKeys: selectedCpIds,
+                  onChange: (keys) => setSelectedCpIds(keys as number[]),
+                }}
+                columns={[
+                  {
+                    title: '姓名',
+                    key: 'candidateName',
+                    render: (_: any, record: any) => (
+                      <a onClick={() => handleViewCandidate(record.candidateId || record.id)}>
+                        {record.candidate?.name || record.candidateName || '-'}
+                      </a>
+                    ),
+                  },
+                  {
+                    title: '联系电话',
+                    key: 'contactPhone',
+                    render: (_: any, record: any) => record.candidate?.contactPhone || record.contactPhone || '-',
+                  },
+                  {
+                    title: '供应商',
+                    key: 'supplier',
+                    render: (_: any, record: any) => record.candidate?.supplier || record.supplier || '-',
+                  },
+                  {
+                    title: '匹配分数',
+                    dataIndex: 'matchScore',
+                    key: 'matchScore',
+                    render: (v: number) => (v !== undefined && v !== null ? <MatchScoreTag score={v} /> : '-'),
+                  },
+                  {
+                    title: '状态',
+                    dataIndex: 'status',
+                    key: 'status',
+                    render: (v: string) => <StatusTag status={v} type="candidate" />,
+                  },
+                  {
+                    title: '操作',
+                    key: 'action',
+                    render: (_: any, record: any) => (
+                      <Space>
+                        <a onClick={() => handleViewCandidate(record.candidateId || record.id)}>查看详情</a>
+                        <a onClick={() => handleAIMatch(record.candidateId || record.id)}>AI匹配</a>
+                        <Popconfirm
+                          title={`确定移除候选人「${record.candidate?.name || record.candidateName || ''}」？`}
+                          onConfirm={() => handleRemoveCandidate(record.id)}
+                          okText="确定"
+                          cancelText="取消"
+                        >
+                          <a style={{ color: '#ff4d4f' }}>移除</a>
+                        </Popconfirm>
+                      </Space>
+                    ),
+                  },
+                ]}
+              />
+            </Card>
+          </div>
+        </Tabs.TabPane>
+
+        <Tabs.TabPane tab="简历库" key="resume">
+          {renderResumeLibrary()}
+        </Tabs.TabPane>
+      </Tabs>
 
       <CandidateModal
         open={candidateModalOpen}

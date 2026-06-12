@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  Table, Input, Button, Space, Tag, Select, Badge, Modal, Checkbox, Descriptions, Divider, Spin, message,
+  Table, Input, Button, Space, Tag, Select, Badge, Modal, Checkbox, Descriptions, Divider, Spin, message, Form, DatePicker,
 } from 'antd';
 import {
   SearchOutlined, UserOutlined, DownOutlined, RightOutlined, ExportOutlined,
@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 import {
   getCandidatesGrouped, updateCandidatePositionStatus, getCandidate,
 } from '../api/candidate';
+import { createInterview } from '../api/interview';
 import { getPositions } from '../api/position';
 import { getProjects } from '../api/project';
 import StatusTag from '../components/StatusTag';
@@ -116,6 +117,12 @@ export default function CandidateList() {
   const [candidateDetail, setCandidateDetail] = useState<any>(null);
   const [candidateDetailLoading, setCandidateDetailLoading] = useState(false);
 
+  // 面试安排弹窗
+  const [interviewModalOpen, setInterviewModalOpen] = useState(false);
+  const [interviewForm] = Form.useForm();
+  const [interviewLoading, setInterviewLoading] = useState(false);
+  const [interviewCpId, setInterviewCpId] = useState<number>(0);
+
   const handleViewCandidate = async (candidateId: number) => {
     try {
       setCandidateDetailLoading(true);
@@ -178,11 +185,41 @@ export default function CandidateList() {
   }, [loadData]);
 
   const handleStatusChange = async (cpId: number, newStatus: string) => {
+    if (newStatus === 'pending_interview') {
+      // 打开面试安排弹窗
+      setInterviewCpId(cpId);
+      interviewForm.resetFields();
+      setInterviewModalOpen(true);
+      return;
+    }
     try {
       await updateCandidatePositionStatus(cpId, newStatus);
       loadData();
     } catch (err: any) {
       console.error(err);
+    }
+  };
+
+  const handleCreateInterview = async () => {
+    try {
+      const values = await interviewForm.validateFields();
+      setInterviewLoading(true);
+      await createInterview({
+        candidatePositionId: interviewCpId,
+        interviewType: values.interviewType || 'online',
+        round: 1,
+        scheduledAt: values.scheduledAt?.toISOString(),
+        meetingLink: values.meetingLink,
+      });
+      message.success('面试安排成功');
+      setInterviewModalOpen(false);
+      interviewForm.resetFields();
+      loadData();
+    } catch (err: any) {
+      if (err.errorFields) return;
+      message.error(err.message || '面试安排失败');
+    } finally {
+      setInterviewLoading(false);
     }
   };
 
@@ -825,6 +862,33 @@ export default function CandidateList() {
             )}
           </div>
         ) : null}
+      </Modal>
+
+      {/* 面试安排弹窗 */}
+      <Modal
+        title="安排面试"
+        open={interviewModalOpen}
+        onOk={handleCreateInterview}
+        onCancel={() => { setInterviewModalOpen(false); interviewForm.resetFields(); }}
+        confirmLoading={interviewLoading}
+        destroyOnClose
+      >
+        <Form form={interviewForm} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="interviewType" label="面试形式" initialValue="online" rules={[{ required: true }]}>
+            <Select options={[
+              { value: 'online', label: '线上' },
+              { value: 'onsite', label: '现场' },
+              { value: 'phone', label: '电话' },
+              { value: 'video', label: '视频' },
+            ]} />
+          </Form.Item>
+          <Form.Item name="scheduledAt" label="面试时间" rules={[{ required: true, message: '请选择面试时间' }]}>
+            <DatePicker showTime style={{ width: '100%' }} placeholder="请选择面试时间" />
+          </Form.Item>
+          <Form.Item name="meetingLink" label="会议链接/信息">
+            <Input placeholder="请输入会议链接或面试地点" />
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

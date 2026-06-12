@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Card, Row, Col, Input, Select, Button, Tag, Space, Spin, Empty, Modal, Form, message, Table, Upload, Steps, Checkbox, Tooltip } from 'antd';
 import { SearchOutlined, PlusOutlined, DollarOutlined, TeamOutlined, ClockCircleOutlined, EnvironmentOutlined, ImportOutlined, UploadOutlined, CheckOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { getPositions, createPosition, batchImportPositions, batchUpdatePositions, batchDeletePositions } from '../api/position';
+import { getPositions, createPosition, batchImportPositions, batchUpdatePositions, batchDeletePositions, deletePosition } from '../api/position';
 import { getProjects } from '../api/project';
 import { analyzeFile } from '../api/ai';
 import { useUserStore } from '../stores/user';
@@ -282,6 +282,25 @@ export default function PositionMarket() {
     });
   };
 
+  const handleDeletePosition = (pos: any) => {
+    Modal.confirm({
+      title: '确认删除',
+      content: `确定要删除岗位「${pos.positionDuty}」吗？此操作不可撤销。`,
+      okText: '确认删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await deletePosition(pos.id);
+          message.success('删除成功');
+          loadData();
+        } catch (err: any) {
+          message.error(err?.message || '删除失败');
+        }
+      },
+    });
+  };
+
   // 预览表格列
   const previewColumns = IMPORT_FIELDS.map((field) => ({
     title: FIELD_LABELS[field] || field,
@@ -449,6 +468,17 @@ export default function PositionMarket() {
                     <Tag>{pos.positionType}</Tag>
                     <Tag color="blue">{pos.techDomain}</Tag>
                   </div>
+                  {!batchMode && (user?.id === pos.creatorId || user?.role === 'admin') && (
+                    <Button
+                      danger
+                      icon={<DeleteOutlined />}
+                      size="small"
+                      style={{ marginTop: 10 }}
+                      onClick={(e) => { e.stopPropagation(); handleDeletePosition(pos); }}
+                    >
+                      删除
+                    </Button>
+                  )}
                 </Card>
               </Col>
             ))}

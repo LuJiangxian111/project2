@@ -27,12 +27,18 @@ export class Interview {
   @Column()
   round: number;
 
-  @Column({ name: 'interviewer_id' })
+  @Column({ name: 'interviewer_id', nullable: true })
   interviewerId: number;
 
   @ManyToOne(() => User, (user) => user.interviews)
   @JoinColumn({ name: 'interviewer_id' })
   interviewer: User;
+
+  @Column({ name: 'interview_type', length: 50, default: 'online' })
+  interviewType: string; // online(线上), onsite(现场), phone(电话), video(视频)
+
+  @Column({ name: 'meeting_link', length: 500, nullable: true })
+  meetingLink: string; // 会议链接/信息
 
   @Column({ name: 'scheduled_at', type: 'datetime' })
   scheduledAt: Date;

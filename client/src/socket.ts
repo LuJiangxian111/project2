@@ -19,6 +19,7 @@ export interface SocketEventMap {
   'candidate.added': (data: { positionId: number; candidateId: number; candidateName: string }) => void;
   'candidate.statusUpdated': (data: { cpId: number; status: string; candidateName: string }) => void;
   'candidate.matched': (data: { candidateId: number; positionId: number; score: number }) => void;
+  'discussion.message': (data: { groupId: number; message: any }) => void;
 }
 
 const eventListeners = new Map<keyof SocketEventMap, Set<(data: any) => void>>();
@@ -72,6 +73,7 @@ export function initSocket() {
     'position.created', 'position.updated', 'position.deleted', 'position.batchUpdated',
     'candidate.created', 'candidate.updated', 'candidate.deleted',
     'candidate.added', 'candidate.statusUpdated', 'candidate.matched',
+    'discussion.message',
   ];
 
   events.forEach((event) => {

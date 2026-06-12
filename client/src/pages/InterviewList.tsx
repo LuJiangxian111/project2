@@ -31,7 +31,7 @@ export default function InterviewList() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const res: any = await getInterviews({ status: filterStatus });
+      const res: any = await getInterviews({ result: filterStatus });
       setInterviews(res.data || res || []);
     } catch (err) {
       console.error(err);

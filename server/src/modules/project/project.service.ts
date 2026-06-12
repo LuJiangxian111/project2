@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Inject, forwardRef } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project } from '../../entities/project.entity';
 import { LogService } from '../log/log.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DiscussionService } from '../discussion/discussion.service';
 
 @Injectable()
 export class ProjectService {
@@ -12,6 +13,8 @@ export class ProjectService {
     private projectRepository: Repository<Project>,
     private logService: LogService,
     private socketGateway: SocketGateway,
+    @Inject(forwardRef(() => DiscussionService))
+    private discussionService: DiscussionService,
   ) {}
 
   async findAll(query?: {
@@ -62,6 +65,18 @@ export class ProjectService {
       name: result.name,
     });
     this.socketGateway.broadcastToAllUsers('project.created', result);
+
+    // 自动创建项目讨论组
+    try {
+      await this.discussionService.createForProject(
+        result.id,
+        userId,
+        result.name + '讨论组',
+      );
+    } catch (err) {
+      console.error('[Project] 创建讨论组失败:', err?.message || err);
+    }
+
     return result;
   }
 

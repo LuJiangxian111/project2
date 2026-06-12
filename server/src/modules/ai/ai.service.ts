@@ -145,6 +145,22 @@ ${fileContent}`;
   ): Promise<{ score: number; detail: any }> {
     const { client, model } = await this.getClient(userId);
 
+    // 如果候选人只有id（从controller传入的裸对象），从数据库加载完整实体
+    if (candidate.id && !candidate.name) {
+      const fullCandidate = await this.candidateRepository.findOne({ where: { id: candidate.id } });
+      if (fullCandidate) {
+        candidate = fullCandidate;
+      }
+    }
+
+    // 如果岗位只有id（从controller传入的裸对象），从数据库加载完整实体
+    if (position.id && !position.positionDuty) {
+      const fullPosition = await this.positionRepository.findOne({ where: { id: position.id } });
+      if (fullPosition) {
+        position = fullPosition;
+      }
+    }
+
     // 如果简历文本为空但有简历链接，尝试读取简历文件内容
     let resumeText = candidate.resumeText || '';
     if (!resumeText && candidate.resumeUrl) {
@@ -567,6 +583,103 @@ ${fileContent}`;
       model: response.model,
       usage: response.usage,
     };
+  }
+
+  /**
+   * 当对话消息过长时，将早期消息压缩为摘要，保留系统提示+摘要+最近几条消息
+   */
+  private async summarizeMessages(
+    client: OpenAI,
+    model: string,
+    messages: { role: string; content: string }[],
+    maxRecentMessages: number = 6,
+    maxTotalChars: number = 20000,
+  ): Promise<{ role: string; content: string }[]> {
+    // 计算总字符数
+    const totalChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+    if (totalChars <= maxTotalChars || messages.length <= maxRecentMessages) {
+      return messages;
+    }
+
+    // 分离早期消息和最近消息
+    const earlyMessages = messages.slice(0, messages.length - maxRecentMessages);
+    const recentMessages = messages.slice(messages.length - maxRecentMessages);
+
+    if (earlyMessages.length === 0) {
+      return messages;
+    }
+
+    // 构建摘要请求
+    const conversationText = earlyMessages
+      .map((m) => `${m.role === 'user' ? '用户' : '助手'}: ${m.content}`)
+      .join('\n\n');
+
+    try {
+      const summaryResponse = await client.chat.completions.create({
+        model,
+        messages: [
+          {
+            role: 'system' as const,
+            content: '你是一个对话摘要助手。请将以下对话历史压缩为简洁的摘要，保留所有关键信息、讨论的主题、已做出的决定、以及提到的文件内容要点。摘要应该足够详细，使得AI助手在后续对话中仍能理解之前的上下文。用中文回复。',
+          },
+          {
+            role: 'user' as const,
+            content: `请总结以下对话历史：\n\n${conversationText}`,
+          },
+        ],
+        temperature: 0.3,
+      }, { timeout: 60000 });
+
+      const summary = summaryResponse.choices[0]?.message?.content || '';
+      console.log(`[AI] 对话摘要生成完成，原始${earlyMessages.length}条消息(${totalChars}字符) → 摘要${summary.length}字符`);
+
+      // 返回摘要消息 + 最近消息
+      return [
+        {
+          role: 'system' as const,
+          content: `[之前的对话摘要]\n${summary}`,
+        },
+        ...recentMessages,
+      ];
+    } catch (err) {
+      console.error('[AI] 生成对话摘要失败，使用原始消息:', err?.message || err);
+      // 摘要失败时，至少截断早期过长的消息
+      return messages.slice(messages.length - maxRecentMessages);
+    }
+  }
+
+  /**
+   * 从消息中提取文件内容并生成简要摘要，用于系统提示
+   */
+  private async generateFileSummary(
+    client: OpenAI,
+    model: string,
+    fileContent: string,
+    fileName: string,
+  ): Promise<string> {
+    if (!fileContent || fileContent.length < 500) return fileContent;
+
+    try {
+      const response = await client.chat.completions.create({
+        model,
+        messages: [
+          {
+            role: 'system' as const,
+            content: '请将以下文件内容压缩为简要摘要，保留关键数据、结构和重要信息点。用中文回复，控制在500字以内。',
+          },
+          {
+            role: 'user' as const,
+            content: `文件名: ${fileName}\n\n文件内容:\n${fileContent.substring(0, 15000)}`,
+          },
+        ],
+        temperature: 0.3,
+      }, { timeout: 60000 });
+
+      return response.choices[0]?.message?.content || fileContent.substring(0, 500);
+    } catch (err) {
+      console.error('[AI] 生成文件摘要失败:', err?.message || err);
+      return fileContent.substring(0, 500);
+    }
   }
 
   async agentChat(messages: { role: string; content: string }[], userId: number, savedFiles?: { fileName: string; savedUrl: string; size: number }[]) {
@@ -993,8 +1106,29 @@ ${fileContent}`;
       {
         type: 'function' as const,
         function: {
+          name: 'schedule_interview',
+          description: '智能安排面试。根据候选人姓名或电话查找候选人，根据项目和岗位信息定位候选人岗位关联，然后创建面试安排。如果找不到候选人或岗位关联，会返回错误提示需要补充信息。',
+          parameters: {
+            type: 'object',
+            properties: {
+              candidateName: { type: 'string', description: '候选人姓名' },
+              candidatePhone: { type: 'string', description: '候选人电话号码（可选，用于精确匹配）' },
+              projectName: { type: 'string', description: '项目名称（可选）' },
+              positionName: { type: 'string', description: '岗位名称/岗位职务（可选）' },
+              interviewType: { type: 'string', enum: ['online', 'onsite', 'phone', 'video'], description: '面试形式：online=线上, onsite=现场, phone=电话, video=视频' },
+              interviewDate: { type: 'string', description: '面试日期时间，如2024-01-15T10:00:00 或 2024-01-15 10:00' },
+              round: { type: 'number', description: '面试轮次，默认1' },
+              meetingLink: { type: 'string', description: '会议链接或面试地点信息（可选）' },
+            },
+            required: ['candidateName', 'interviewType', 'interviewDate'],
+          },
+        },
+      },
+      {
+        type: 'function' as const,
+        function: {
           name: 'create_interview',
-          description: '创建面试安排',
+          description: '通过候选人ID和岗位ID直接创建面试安排（需要已知精确ID时使用）',
           parameters: {
             type: 'object',
             properties: {
@@ -1003,6 +1137,8 @@ ${fileContent}`;
               interviewDate: { type: 'string', description: '面试日期时间，如2024-01-15T10:00:00' },
               round: { type: 'number', description: '面试轮次' },
               interviewerId: { type: 'number', description: '面试官用户ID' },
+              interviewType: { type: 'string', description: '面试形式：online/onsite/phone/video' },
+              meetingLink: { type: 'string', description: '会议链接或面试地点信息' },
             },
             required: ['candidateId', 'positionId', 'interviewDate', 'round'],
           },
@@ -1063,6 +1199,25 @@ ${fileContent}`;
           },
         },
       },
+      // ===== Interview scheduling tool =====
+      {
+        type: 'function' as const,
+        function: {
+          name: 'schedule_interview',
+          description: '为候选人安排面试。会自动将候选人状态更新为待面试，并通知候选人上传者。面试状态：pending(待面试)、pass(面试通过)、fail(面试不通过)、cancel(放弃面试)。',
+          parameters: {
+            type: 'object',
+            properties: {
+              candidatePositionId: { type: 'number', description: '候选人-岗位关联ID（candidate_position的id）' },
+              interviewType: { type: 'string', description: '面试形式：online(线上)、onsite(现场)、phone(电话)、video(视频)', enum: ['online', 'onsite', 'phone', 'video'] },
+              scheduledAt: { type: 'string', description: '面试时间，格式：YYYY-MM-DD HH:mm' },
+              meetingLink: { type: 'string', description: '会议链接/信息（如腾讯会议链接、面试地点等）' },
+              round: { type: 'number', description: '面试轮次，默认1' },
+            },
+            required: ['candidatePositionId', 'interviewType', 'scheduledAt'],
+          },
+        },
+      },
       // ===== Dashboard/Stats tools =====
       {
         type: 'function' as const,
@@ -1114,7 +1269,7 @@ ${fileContent}`;
 候选人管理：添加、查看、更新、删除候选人，按姓名/手机号搜索候选人，批量导入候选人数据，导出候选人数据为CSV，上传候选人简历文件
 分配管理：将候选人分配到岗位，查看岗位的候选人列表，批量更新候选人在岗位中的状态
 候选人状态说明：pending_screen(待筛选)、screen_rejected(筛选未通过)、screen_passed(筛选通过)、pending_interview(待面试)、interview_passed(面试通过)、interview_rejected(面试未通过)、abandoned(已放弃)、pending_onboard(待入职)、onboarded(已入职)
-面试管理：创建面试安排，查看面试列表
+面试管理：智能安排面试（支持通过姓名/电话查找候选人，通过项目/岗位名定位），创建面试安排，查看面试列表
 AI分析：候选人匹配分析、风险分析、生成报告
 数据统计：查看仪表盘统计数据
 
@@ -1124,6 +1279,7 @@ AI分析：候选人匹配分析、风险分析、生成报告
 3. 当用户上传文件要求导入时，先理解文件内容，然后调用相应的导入工具。如果用户指定了目标岗位，先用search_positions找到岗位ID，再导入
 4. 当用户要求导出数据时，调用导出工具生成CSV格式数据，用\`\`\`csv和\`\`\`包裹CSV内容
 5. 操作完成后，用中文向用户汇报结果。如果参数不完整，请主动询问
+6. **面试安排规则**：当用户要求安排面试时，优先使用schedule_interview工具。该工具支持通过候选人姓名/电话、项目名、岗位名来智能匹配。如果用户提供的面试信息中缺少项目或岗位信息，你必须主动询问用户该候选人面试的是哪个项目和岗位，然后再安排
 
 文件识别规则（非常重要）：
 当用户上传文件时，你必须首先识别文件类型，然后根据不同类型执行不同操作：
@@ -1163,7 +1319,10 @@ Excel文件处理规则（非常重要）：
 - 导入完成后，报告成功导入的数量，如果与文件行数不一致，说明原因`,
     };
 
-    const allMessages = [systemMessage, ...messages] as any[];
+    // 对用户消息进行摘要处理：当消息过长时压缩早期消息
+    const processedMessages = await this.summarizeMessages(client, model, messages, 6, 20000);
+
+    const allMessages = [systemMessage, ...processedMessages] as any[];
 
     let response = await client.chat.completions.create({
       model,
@@ -1774,6 +1933,136 @@ Excel文件处理规则（非常重要）：
           score: i.score,
         }));
       }
+      case 'schedule_interview': {
+        // 1. 根据姓名/电话查找候选人
+        const candidateQb = this.candidateRepository.createQueryBuilder('c');
+        candidateQb.where('c.name = :name', { name: args.candidateName });
+        if (args.candidatePhone) {
+          candidateQb.orWhere('c.contactPhone = :phone', { phone: args.candidatePhone });
+        }
+        const matchedCandidates = await candidateQb.getMany();
+
+        if (matchedCandidates.length === 0) {
+          return { error: `未找到候选人"${args.candidateName}"，请确认姓名是否正确，或先添加该候选人` };
+        }
+
+        // 2. 查找候选人的岗位关联
+        const candidateIds = matchedCandidates.map(c => c.id);
+        const cpQb = this.candidatePositionRepository.createQueryBuilder('cp')
+          .leftJoinAndSelect('cp.candidate', 'candidate')
+          .leftJoinAndSelect('cp.position', 'position')
+          .leftJoinAndSelect('position.project', 'project')
+          .where('cp.candidateId IN (:...candidateIds)', { candidateIds });
+
+        if (args.positionName) {
+          cpQb.andWhere('position.positionDuty LIKE :posName', { posName: `%${args.positionName}%` });
+        }
+        if (args.projectName) {
+          cpQb.andWhere('project.name LIKE :projName', { projName: `%${args.projectName}%` });
+        }
+
+        const candidatePositions = await cpQb.getMany();
+
+        if (candidatePositions.length === 0) {
+          // 没有匹配的岗位关联，返回候选人的所有岗位供AI询问
+          const allCps = await this.candidatePositionRepository.find({
+            where: candidateIds.map(id => ({ candidateId: id })),
+            relations: ['candidate', 'position', 'position.project'],
+          });
+
+          if (allCps.length === 0) {
+            return { error: `候选人"${args.candidateName}"尚未分配到任何岗位，请先将候选人分配到岗位后再安排面试` };
+          }
+
+          if (allCps.length === 1) {
+            // 只有一个岗位关联，直接使用
+            const cp = allCps[0];
+            const interview = this.interviewRepository.create({
+              candidatePositionId: cp.id,
+              round: args.round || 1,
+              interviewerId: userId,
+              interviewType: args.interviewType || 'online',
+              scheduledAt: new Date(args.interviewDate),
+              meetingLink: args.meetingLink || null,
+              result: 'pending',
+            });
+            const result = await this.interviewRepository.save(interview);
+
+            // 同步候选人状态
+            if (cp.status !== 'pending_interview') {
+              cp.status = 'pending_interview';
+              await this.candidatePositionRepository.save(cp);
+            }
+
+            return {
+              id: result.id,
+              candidateName: (cp as any).candidate?.name || args.candidateName,
+              positionDuty: (cp as any).position?.positionDuty || '未知',
+              projectName: (cp as any).position?.project?.name || '未知',
+              interviewType: args.interviewType,
+              scheduledAt: result.scheduledAt,
+              round: result.round,
+              message: '面试安排成功',
+            };
+          }
+
+          // 多个岗位关联，返回列表让AI询问
+          const cpList = allCps.map(cp => ({
+            cpId: cp.id,
+            candidateName: (cp as any).candidate?.name,
+            positionDuty: (cp as any).position?.positionDuty,
+            projectName: (cp as any).position?.project?.name,
+          }));
+          return {
+            error: `候选人"${args.candidateName}"关联了多个岗位，请指定项目和岗位`,
+            availablePositions: cpList,
+          };
+        }
+
+        if (candidatePositions.length === 1) {
+          // 精确匹配到一个岗位关联
+          const cp = candidatePositions[0];
+          const interview = this.interviewRepository.create({
+            candidatePositionId: cp.id,
+            round: args.round || 1,
+            interviewerId: userId,
+            interviewType: args.interviewType || 'online',
+            scheduledAt: new Date(args.interviewDate),
+            meetingLink: args.meetingLink || null,
+            result: 'pending',
+          });
+          const result = await this.interviewRepository.save(interview);
+
+          // 同步候选人状态
+          if (cp.status !== 'pending_interview') {
+            cp.status = 'pending_interview';
+            await this.candidatePositionRepository.save(cp);
+          }
+
+          return {
+            id: result.id,
+            candidateName: (cp as any).candidate?.name || args.candidateName,
+            positionDuty: (cp as any).position?.positionDuty || '未知',
+            projectName: (cp as any).position?.project?.name || '未知',
+            interviewType: args.interviewType,
+            scheduledAt: result.scheduledAt,
+            round: result.round,
+            message: '面试安排成功',
+          };
+        }
+
+        // 匹配到多个岗位关联，返回列表让AI进一步筛选
+        const cpList = candidatePositions.map(cp => ({
+          cpId: cp.id,
+          candidateName: (cp as any).candidate?.name,
+          positionDuty: (cp as any).position?.positionDuty,
+          projectName: (cp as any).position?.project?.name,
+        }));
+        return {
+          error: `匹配到多个岗位关联，请进一步指定项目和岗位`,
+          availablePositions: cpList,
+        };
+      }
       case 'create_interview': {
         // First find or create the candidate_position record
         let cp = await this.candidatePositionRepository.findOne({
@@ -1793,11 +2082,20 @@ Excel文件处理规则（非常重要）：
           candidatePositionId: cp.id,
           round: args.round || 1,
           interviewerId: args.interviewerId || userId,
+          interviewType: args.interviewType || 'online',
           scheduledAt: new Date(args.interviewDate),
+          meetingLink: args.meetingLink || null,
           result: 'pending',
         });
         const result = await this.interviewRepository.save(interview);
-        return { id: result.id, candidateId: args.candidateId, positionId: args.positionId, scheduledAt: result.scheduledAt, round: result.round, message: '面试安排创建成功' };
+
+        // 同步候选人状态
+        if (cp.status !== 'pending_interview') {
+          cp.status = 'pending_interview';
+          await this.candidatePositionRepository.save(cp);
+        }
+
+        return { id: result.id, candidateId: args.candidateId, positionId: args.positionId, scheduledAt: result.scheduledAt, round: result.round, interviewType: args.interviewType, message: '面试安排创建成功' };
       }
       // ===== Export tools =====
       case 'export_positions_csv': {
@@ -1902,6 +2200,52 @@ Excel文件处理规则（非常重要）：
           failed: results.length - successCount,
           details: results,
           message: `简历上传完成：成功${successCount}个，失败${results.length - successCount}个`
+        };
+      }
+      case 'schedule_interview': {
+        const cpId = args.candidatePositionId;
+        if (!cpId) return { error: '请指定候选人-岗位关联ID' };
+
+        const cp = await this.candidatePositionRepository.findOne({
+          where: { id: cpId },
+          relations: ['candidate', 'position'],
+        });
+        if (!cp) return { error: '未找到该候选人-岗位关联记录' };
+
+        const interview = this.interviewRepository.create({
+          candidatePositionId: cpId,
+          interviewType: args.interviewType || 'online',
+          scheduledAt: args.scheduledAt ? new Date(args.scheduledAt) : new Date(),
+          meetingLink: args.meetingLink || '',
+          round: args.round || 1,
+          result: 'pending',
+        });
+        await this.interviewRepository.save(interview);
+
+        // 同步候选人状态为待面试
+        if (cp.status !== 'pending_interview') {
+          cp.status = 'pending_interview';
+          await this.candidatePositionRepository.save(cp);
+        }
+
+        // 通知候选人上传者
+        if (cp.recommenderId) {
+          try {
+            const { NoticeService } = require('../notice/notice.service');
+            // 通过注入的方式获取NoticeService
+          } catch {}
+        }
+
+        const typeLabels: Record<string, string> = { online: '线上', onsite: '现场', phone: '电话', video: '视频' };
+        return {
+          success: true,
+          interviewId: interview.id,
+          candidateName: cp.candidate?.name,
+          positionDuty: cp.position?.positionDuty,
+          interviewType: typeLabels[args.interviewType] || args.interviewType,
+          scheduledAt: interview.scheduledAt,
+          meetingLink: interview.meetingLink,
+          message: `已为候选人「${cp.candidate?.name || '未知'}」安排${typeLabels[args.interviewType] || ''}面试，岗位：${cp.position?.positionDuty || '未知'}，时间：${interview.scheduledAt.toLocaleString('zh-CN')}`
         };
       }
       // ===== Dashboard/Stats tools =====

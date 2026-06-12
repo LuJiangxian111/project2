@@ -7,9 +7,16 @@ import {
   Param,
   Body,
   Query,
+  Res,
   UseGuards,
   ParseIntPipe,
+  UseInterceptors,
+  UploadedFile,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { join } from 'path';
+import { Response } from 'express';
 import { PositionService } from './position.service';
 import { CandidateService } from '../candidate/candidate.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -96,6 +103,61 @@ export class PositionController {
 
     console.log(`[Position] batch-import done: success=${success}, updated=${updated}, failed=${failed}`);
     return { success, failed, updated, errors };
+  }
+
+  @Get('dashboard/stats')
+  async getDashboardStats(@Query('projectId') projectId?: string) {
+    return this.positionService.getDashboardStats(projectId ? parseInt(projectId) : undefined);
+  }
+
+  // ========== 简历库端点（必须在 :id 路由之前） ==========
+
+  @Get(':id/resume-library')
+  async getResumeLibrary(@Param('id', ParseIntPipe) id: number) {
+    return this.positionService.getResumeLibrary(id);
+  }
+
+  @Post(':id/resume-library/upload')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'resumes'),
+      filename: (_req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = file.originalname.split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  }))
+  async uploadResumeToLibrary(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.positionService.uploadResumeFile(file);
+  }
+
+  @Post(':id/resume-library/smart-upload')
+  async smartUploadResume(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { fileUrl: string; fileName: string; extractedText?: string },
+    @CurrentUser() user: any,
+  ) {
+    return this.positionService.smartUploadResume(
+      id,
+      body.fileUrl,
+      body.fileName,
+      body.extractedText || '',
+      user.id,
+    );
+  }
+
+  @Post(':id/resume-library/export')
+  async exportResumes(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { candidateIds: number[] },
+    @Res() res: Response,
+  ) {
+    return this.positionService.exportResumes(id, body.candidateIds || [], res);
   }
 
   @Get(':id')

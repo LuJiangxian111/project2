@@ -23,6 +23,7 @@ export class InterviewController {
     @Query('interviewerId') interviewerId?: string,
     @Query('result') result?: string,
     @Query('candidatePositionId') candidatePositionId?: string,
+    @Query('projectId') projectId?: string,
   ) {
     return this.interviewService.findAll({
       interviewerId: interviewerId ? parseInt(interviewerId) : undefined,
@@ -30,6 +31,7 @@ export class InterviewController {
       candidatePositionId: candidatePositionId
         ? parseInt(candidatePositionId)
         : undefined,
+      projectId: projectId ? parseInt(projectId) : undefined,
     });
   }
 
