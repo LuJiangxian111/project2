@@ -625,7 +625,8 @@ export default function CandidateList() {
         rowKey={(r) => `${r.name}_${r.contactPhone || r.phone}`}
         loading={loading}
         pagination={{ pageSize: 20, showTotal: (t) => `共 ${t} 人` }}
-        scroll={{ x: 1600 }}
+        scroll={{ x: 1600, y: 'calc(100vh - 320px)' }}
+        sticky
         columns={[
           {
             title: '候选人',

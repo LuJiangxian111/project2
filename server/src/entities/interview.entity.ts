@@ -20,6 +20,7 @@ export class Interview {
   @ManyToOne(
     () => CandidatePosition,
     (cp) => cp.interviews,
+    { onDelete: 'CASCADE' },
   )
   @JoinColumn({ name: 'candidate_position_id' })
   candidatePosition: CandidatePosition;

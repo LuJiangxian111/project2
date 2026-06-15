@@ -4,11 +4,12 @@ import { DiscussionController } from './discussion.controller';
 import { DiscussionService } from './discussion.service';
 import { DiscussionGroup } from '../../entities/discussion-group.entity';
 import { DiscussionMessage } from '../../entities/discussion-message.entity';
+import { User } from '../../entities/user.entity';
 import { SocketModule } from '../socket/socket.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DiscussionGroup, DiscussionMessage]),
+    TypeOrmModule.forFeature([DiscussionGroup, DiscussionMessage, User]),
     SocketModule,
   ],
   controllers: [DiscussionController],

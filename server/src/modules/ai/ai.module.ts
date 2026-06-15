@@ -9,11 +9,13 @@ import { Project } from '../../entities/project.entity';
 import { CandidatePosition } from '../../entities/candidate-position.entity';
 import { Interview } from '../../entities/interview.entity';
 import { LogModule } from '../log/log.module';
+import { SystemConfigModule } from '../system-config/system-config.module';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User, Position, Candidate, Project, CandidatePosition, Interview]),
     LogModule,
+    SystemConfigModule,
   ],
   controllers: [AiController],
   providers: [AiService],

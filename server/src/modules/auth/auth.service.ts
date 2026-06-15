@@ -54,12 +54,22 @@ export class AuthService {
     name: string,
     role: string,
     adminKey?: string,
+    employeeId?: string,
   ) {
     const existing = await this.userRepository.findOne({
       where: { username },
     });
     if (existing) {
       throw new ConflictException('用户名已存在');
+    }
+    // 检查员工ID唯一性
+    if (employeeId) {
+      const existingEmployee = await this.userRepository.findOne({
+        where: { employeeId },
+      });
+      if (existingEmployee) {
+        throw new ConflictException('该员工ID已被注册');
+      }
     }
     // 注册管理员需要验证管理员密码
     if (role === 'admin') {
@@ -73,6 +83,7 @@ export class AuthService {
       password: hashedPassword,
       name,
       role: role as 'admin' | 'hr' | 'pm' | 'interviewer',
+      employeeId: employeeId || null,
     });
     await this.userRepository.save(user);
     const { password: _, ...result } = user;

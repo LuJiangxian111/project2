@@ -2,20 +2,23 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card, List, Input, Button, Avatar, Tag, Dropdown, Modal, Select, Space, Tooltip, Badge,
-  Empty, Spin, message as antMessage, Descriptions, Divider, Table,
+  Empty, Spin, message as antMessage, Descriptions, Divider, Table, Popconfirm, Popover,
 } from 'antd';
 import {
   TeamOutlined, SendOutlined, UserOutlined,
-  LinkOutlined, PlusOutlined, ReloadOutlined, UserAddOutlined,
+  LinkOutlined, PlusOutlined, ReloadOutlined, UserAddOutlined, DeleteOutlined, LogoutOutlined,
+  RobotOutlined, SoundOutlined, SoundFilled,
 } from '@ant-design/icons';
 import { useUserStore } from '../stores/user';
 import { on, off } from '../socket';
+import { isSoundEnabled, setSoundEnabled, playMessageSound } from '../utils/notification-sound';
 import {
-  getMyGroups, getMessages, sendMessage, getMembers,
+  getMyGroups, getMessages, sendMessage, getMembers, addMember, dissolveGroup, removeMember,
 } from '../api/discussion';
 import { getPositions } from '../api/position';
-import { getCandidates, getCandidate } from '../api/candidate';
+import { getCandidatesGrouped, getCandidate } from '../api/candidate';
 import { getInterviews } from '../api/interview';
+import { getUsers } from '../api/auth';
 import StatusTag from '../components/StatusTag';
 
 const { TextArea } = Input;
@@ -25,6 +28,7 @@ interface GroupItem {
   name: string;
   projectId?: number;
   projectName?: string;
+  leaderId?: number;
   memberCount?: number;
   lastMessage?: {
     content: string;
@@ -44,6 +48,7 @@ interface MessageItem {
   referenceId?: number;
   referenceData?: any;
   createdAt: string;
+  isBot?: boolean;
 }
 
 interface MemberItem {
@@ -121,6 +126,17 @@ export default function DiscussionGroups() {
   const [refSearchKeyword, setRefSearchKeyword] = useState('');
   const [selectedRefId, setSelectedRefId] = useState<number | null>(null);
 
+  // 邀请成员弹窗
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [inviteUsers, setInviteUsers] = useState<any[]>([]);
+  const [inviteUsersLoading, setInviteUsersLoading] = useState(false);
+  const [inviteSearchKeyword, setInviteSearchKeyword] = useState('');
+  const [selectedInviteIds, setSelectedInviteIds] = useState<number[]>([]);
+  const [inviteSubmitting, setInviteSubmitting] = useState(false);
+
+  // 声音开关
+  const [soundOn, setSoundOn] = useState(isSoundEnabled());
+
   const messageListRef = useRef<HTMLDivElement>(null);
   const isAutoScrollRef = useRef(true);
   const selectedGroupIdRef = useRef<number | null>(null);
@@ -146,6 +162,7 @@ export default function DiscussionGroups() {
         name: g.name,
         projectId: g.projectId || g.project?.id,
         projectName: g.projectName || g.project?.name,
+        leaderId: g.leaderId || g.leader?.id,
         memberCount: g.members?.length || 0,
         lastMessage: g.lastMessage,
       })));
@@ -166,13 +183,25 @@ export default function DiscussionGroups() {
       if (!before) setMessagesLoading(true);
       const res: any = await getMessages(groupId, { limit: 30, before });
       const data = res.data || res || [];
-      const newMessages = Array.isArray(data) ? data : [];
+      const rawMessages = Array.isArray(data) ? data : [];
+      // 标准化消息格式
+      const normalizedMessages = rawMessages.map((msg: any) => ({
+        ...msg,
+        senderId: msg.senderId || msg.sender?.id,
+        senderName: msg.senderName || msg.sender?.nickname || msg.sender?.name || msg.sender?.username,
+        senderAvatar: msg.senderAvatar || msg.sender?.avatar,
+        referenceData: msg.referenceData
+          ? (typeof msg.referenceData === 'string'
+            ? (() => { try { return JSON.parse(msg.referenceData); } catch { return null; } })()
+            : msg.referenceData)
+          : null,
+      }));
       if (before) {
-        setMessages((prev) => [...newMessages, ...prev]);
-        setHasMoreMessages(newMessages.length >= 30);
+        setMessages((prev) => [...normalizedMessages, ...prev]);
+        setHasMoreMessages(normalizedMessages.length >= 30);
       } else {
-        setMessages(newMessages);
-        setHasMoreMessages(newMessages.length >= 30);
+        setMessages(normalizedMessages);
+        setHasMoreMessages(normalizedMessages.length >= 30);
       }
     } catch {
       antMessage.error('加载消息失败');
@@ -215,10 +244,23 @@ export default function DiscussionGroups() {
     const handler = (data: { groupId: number; message: any }) => {
       const currentGroupId = selectedGroupIdRef.current;
       if (data.groupId === currentGroupId) {
+        const msg = data.message;
+        // 标准化消息格式
+        const normalizedMsg = {
+          ...msg,
+          senderId: msg.senderId || msg.sender?.id,
+          senderName: msg.senderName || msg.sender?.nickname || msg.sender?.name || msg.sender?.username,
+          senderAvatar: msg.senderAvatar || msg.sender?.avatar,
+          referenceData: msg.referenceData
+            ? (typeof msg.referenceData === 'string'
+              ? (() => { try { return JSON.parse(msg.referenceData); } catch { return null; } })()
+              : msg.referenceData)
+            : null,
+        };
         setMessages((prev) => {
           // 避免重复添加（发送时已乐观添加）
-          if (prev.some((m) => m.id === data.message.id)) return prev;
-          return [...prev, data.message];
+          if (prev.some((m) => m.id === normalizedMsg.id)) return prev;
+          return [...prev, normalizedMsg];
         });
       }
       // 更新讨论组列表中的最后消息
@@ -241,6 +283,23 @@ export default function DiscussionGroups() {
     on('discussion.message', handler);
     return () => off('discussion.message', handler);
   }, []);
+
+  // 监听讨论组解散事件
+  useEffect(() => {
+    const handler = (data: { groupId: number; groupName: string }) => {
+      const currentGroupId = selectedGroupIdRef.current;
+      if (data.groupId === currentGroupId) {
+        antMessage.warning(`讨论组"${data.groupName}"已被创建者解散`);
+        setSelectedGroupId(null);
+        setMessages([]);
+        setMembers([]);
+      }
+      loadGroups();
+    };
+
+    on('discussion.dissolved', handler);
+    return () => off('discussion.dissolved', handler);
+  }, [loadGroups]);
 
   // 自动滚动到底部
   useEffect(() => {
@@ -306,8 +365,19 @@ export default function DiscussionGroups() {
       // 用服务器返回的真实消息替换临时消息
       const savedMsg = res.data || res;
       if (savedMsg && savedMsg.id) {
+        const normalizedMsg = {
+          ...savedMsg,
+          senderId: savedMsg.senderId || savedMsg.sender?.id,
+          senderName: savedMsg.senderName || savedMsg.sender?.nickname || savedMsg.sender?.name || savedMsg.sender?.username,
+          senderAvatar: savedMsg.senderAvatar || savedMsg.sender?.avatar,
+          referenceData: savedMsg.referenceData
+            ? (typeof savedMsg.referenceData === 'string'
+              ? (() => { try { return JSON.parse(savedMsg.referenceData); } catch { return null; } })()
+              : savedMsg.referenceData)
+            : null,
+        };
         setMessages((prev) =>
-          prev.map((m) => (m.id === tempId ? { ...savedMsg, id: savedMsg.id } : m))
+          prev.map((m) => (m.id === tempId ? normalizedMsg : m))
         );
       }
     } catch {
@@ -358,52 +428,63 @@ export default function DiscussionGroups() {
           if (currentProjectId) params.projectId = currentProjectId;
           const res: any = await getPositions(params);
           data = (res.data || res || []);
-          // 如果有项目ID，进一步过滤
           if (currentProjectId) {
             data = data.filter((p: any) => p.projectId === currentProjectId || p.project?.id === currentProjectId);
           }
           break;
         }
         case 'candidate': {
-          const res: any = await getCandidates();
-          const all = (res.data || res || []);
-          // 过滤当前项目的候选人
-          let filtered = all;
-          if (currentProjectId) {
-            filtered = all.filter((c: any) =>
-              c.positions?.some((cp: any) => cp.projectId === currentProjectId || cp.project?.id === currentProjectId)
-            );
-          }
-          data = keyword
-            ? filtered.filter((c: any) => c.name?.includes(keyword) || c.contactPhone?.includes(keyword))
-            : filtered;
+          // 使用 grouped API 获取带项目关联的候选人数据
+          const params: any = {};
+          if (currentProjectId) params.projectId = currentProjectId;
+          if (keyword) params.keyword = keyword;
+          const res: any = await getCandidatesGrouped(params);
+          const groups = (res.data || res || []);
+          // grouped 返回的是按姓名分组的对象，每个包含 candidateIds 和 positions
+          data = groups.map((g: any) => ({
+            id: g.candidateIds?.[0],
+            name: g.name,
+            contactPhone: g.phone || g.contactPhone,
+            gender: g.gender,
+            education: g.education,
+            workStatus: g.workStatus,
+            supplier: g.supplier,
+            resumeUrl: g.resumeUrl,
+            positions: g.positions,
+          })).filter((c: any) => c.id);
           break;
         }
         case 'resume': {
-          const res: any = await getCandidates();
-          const all = (res.data || res || []);
-          // 过滤当前项目有简历的候选人
-          let filtered = all.filter((c: any) => c.resumeUrl);
-          if (currentProjectId) {
-            filtered = filtered.filter((c: any) =>
-              c.positions?.some((cp: any) => cp.projectId === currentProjectId || cp.project?.id === currentProjectId)
-            );
+          // 使用 grouped API 获取带项目关联的候选人，筛选有简历的
+          const params: any = {};
+          if (currentProjectId) params.projectId = currentProjectId;
+          if (keyword) params.keyword = keyword;
+          const res: any = await getCandidatesGrouped(params);
+          const groups = (res.data || res || []);
+          data = groups
+            .filter((g: any) => {
+              // 检查候选人自身或岗位关联中有简历
+              const hasResume = g.resumeUrl || g.positions?.some((p: any) => p.resumeUrl);
+              return hasResume;
+            })
+            .map((g: any) => ({
+              id: g.candidateIds?.[0],
+              name: g.name,
+              contactPhone: g.phone || g.contactPhone,
+              resumeUrl: g.resumeUrl || g.positions?.find((p: any) => p.resumeUrl)?.resumeUrl,
+              positions: g.positions,
+            }))
+            .filter((c: any) => c.id);
+          if (keyword) {
+            data = data.filter((c: any) => c.name?.includes(keyword));
           }
-          data = keyword
-            ? filtered.filter((c: any) => c.name?.includes(keyword))
-            : filtered;
           break;
         }
         case 'interview': {
-          const res: any = await getInterviews();
+          const params: any = {};
+          if (currentProjectId) params.projectId = currentProjectId;
+          const res: any = await getInterviews(params);
           data = (res.data || res || []);
-          // 过滤当前项目的面试
-          if (currentProjectId) {
-            data = data.filter((i: any) =>
-              i.candidatePosition?.position?.projectId === currentProjectId ||
-              i.candidatePosition?.position?.project?.id === currentProjectId
-            );
-          }
           if (keyword) {
             data = data.filter((i: any) =>
               i.candidatePosition?.candidate?.name?.includes(keyword) ||
@@ -496,7 +577,7 @@ export default function DiscussionGroups() {
   // 获取引用项显示名称
   const getRefItemLabel = (type: string, item: any): string => {
     switch (type) {
-      case 'position': return item.systemName || item.positionDuty || `岗位#${item.id}`;
+      case 'position': return `${item.systemName ? item.systemName + ' - ' : ''}${item.positionDuty || `岗位#${item.id}`}`;
       case 'candidate': return item.name || `候选人#${item.id}`;
       case 'resume': return `${item.name || '未知'} - ${item.resumeUrl?.split('/').pop() || '无文件'}`;
       case 'interview': {
@@ -509,8 +590,12 @@ export default function DiscussionGroups() {
 
   // 引用卡片点击跳转
   const handleRefClick = async (msg: MessageItem) => {
-    const data = msg.referenceData;
+    let data = msg.referenceData;
     if (!data) return;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch { return; }
+    }
+    if (typeof data !== 'object' || data === null) return;
 
     switch (msg.referenceType) {
       case 'position':
@@ -562,12 +647,105 @@ export default function DiscussionGroups() {
     }
   };
 
+  // 打开邀请成员弹窗
+  const openInviteModal = async () => {
+    if (!selectedGroupId) return;
+    setInviteModalOpen(true);
+    setSelectedInviteIds([]);
+    setInviteSearchKeyword('');
+    try {
+      setInviteUsersLoading(true);
+      const res: any = await getUsers();
+      const allUsers = (res.data || res || []);
+      // 排除已在讨论组中的成员
+      const memberIds = new Set(members.map((m: any) => m.id));
+      const available = allUsers.filter((u: any) => !memberIds.has(u.id));
+      setInviteUsers(available);
+    } catch {
+      setInviteUsers([]);
+    } finally {
+      setInviteUsersLoading(false);
+    }
+  };
+
+  // 搜索可邀请用户
+  const searchInviteUsers = async (keyword: string) => {
+    try {
+      setInviteUsersLoading(true);
+      const res: any = await getUsers({ keyword });
+      const allUsers = (res.data || res || []);
+      const memberIds = new Set(members.map((m: any) => m.id));
+      const available = allUsers.filter((u: any) => !memberIds.has(u.id));
+      setInviteUsers(available);
+    } catch {
+      setInviteUsers([]);
+    } finally {
+      setInviteUsersLoading(false);
+    }
+  };
+
+  // 确认邀请成员
+  const handleInviteConfirm = async () => {
+    if (!selectedGroupId || selectedInviteIds.length === 0) return;
+    try {
+      setInviteSubmitting(true);
+      for (const userId of selectedInviteIds) {
+        await addMember(selectedGroupId, userId);
+      }
+      antMessage.success(`成功邀请 ${selectedInviteIds.length} 位成员`);
+      setInviteModalOpen(false);
+      setSelectedInviteIds([]);
+      // 刷新成员列表
+      loadMembers(selectedGroupId);
+    } catch (err: any) {
+      antMessage.error(err?.response?.data?.message || '邀请失败');
+    } finally {
+      setInviteSubmitting(false);
+    }
+  };
+
+  // 解散讨论组
+  const handleDissolveGroup = async () => {
+    if (!selectedGroupId) return;
+    try {
+      await dissolveGroup(selectedGroupId);
+      antMessage.success('讨论组已解散');
+      setSelectedGroupId(null);
+      setMessages([]);
+      setMembers([]);
+      loadGroups();
+    } catch (err: any) {
+      antMessage.error(err?.response?.data?.message || '解散失败');
+    }
+  };
+
+  // 退出讨论组
+  const handleLeaveGroup = async () => {
+    if (!selectedGroupId || !user?.id) return;
+    try {
+      await removeMember(selectedGroupId, user.id);
+      antMessage.success('已退出讨论组');
+      setSelectedGroupId(null);
+      setMessages([]);
+      setMembers([]);
+      loadGroups();
+    } catch (err: any) {
+      antMessage.error(err?.response?.data?.message || '退出失败');
+    }
+  };
+
   // 渲染引用卡片（可点击跳转）
   const renderReferenceCard = (msg: MessageItem) => {
     if (!msg.referenceType || !msg.referenceData) return null;
+    // 防御性：确保referenceData是对象
+    let data = msg.referenceData;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch { return null; }
+    }
+    if (typeof data !== 'object' || data === null) return null;
+
     const color = referenceTypeColors[msg.referenceType] || '#1890ff';
     const label = referenceTypeLabels[msg.referenceType] || msg.referenceType;
-    const data = msg.referenceData;
 
     let content: React.ReactNode = null;
     switch (msg.referenceType) {
@@ -678,9 +856,24 @@ export default function DiscussionGroups() {
       <Card
         title="讨论组"
         extra={
-          <Tooltip title="刷新">
-            <Button type="text" icon={<ReloadOutlined />} onClick={loadGroups} loading={groupsLoading} />
-          </Tooltip>
+          <Space>
+            <Tooltip title={soundOn ? '关闭提示音' : '开启提示音'}>
+              <Button
+                type="text"
+                icon={soundOn ? <SoundFilled /> : <SoundOutlined />}
+                onClick={() => {
+                  const next = !soundOn;
+                  setSoundOn(next);
+                  setSoundEnabled(next);
+                  if (next) playMessageSound(); // 开启时试听一下
+                }}
+                style={{ color: soundOn ? '#1890ff' : '#8c8c8c' }}
+              />
+            </Tooltip>
+            <Tooltip title="刷新">
+              <Button type="text" icon={<ReloadOutlined />} onClick={loadGroups} loading={groupsLoading} />
+            </Tooltip>
+          </Space>
         }
         style={{ width: 320, minWidth: 280, borderRadius: '8px 0 0 8px' }}
         styles={{ body: { padding: 0, overflow: 'auto', height: 'calc(100% - 57px)' } }}
@@ -776,11 +969,97 @@ export default function DiscussionGroups() {
                 )}
               </div>
               <Space>
-                <Tooltip title="成员">
-                  <Badge count={members.length} size="small" offset={[6, -4]}>
-                    <TeamOutlined style={{ fontSize: 18, color: '#8c8c8c' }} />
-                  </Badge>
+                {selectedGroup.leaderId === user?.id ? (
+                  <Popconfirm
+                    title="确定解散该讨论组？"
+                    description="解散后所有消息将被删除，且不可恢复"
+                    onConfirm={handleDissolveGroup}
+                    okText="确定解散"
+                    cancelText="取消"
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Tooltip title="解散讨论组">
+                      <Button type="text" icon={<DeleteOutlined />} size="small" danger />
+                    </Tooltip>
+                  </Popconfirm>
+                ) : (
+                  <Popconfirm
+                    title="确定退出该讨论组？"
+                    description="退出后将不再收到该讨论组消息"
+                    onConfirm={handleLeaveGroup}
+                    okText="确定退出"
+                    cancelText="取消"
+                  >
+                    <Tooltip title="退出讨论组">
+                      <Button type="text" icon={<LogoutOutlined />} size="small" />
+                    </Tooltip>
+                  </Popconfirm>
+                )}
+                <Tooltip title="邀请成员">
+                  <Button type="text" icon={<UserAddOutlined />} onClick={openInviteModal} size="small" />
                 </Tooltip>
+                <Popover
+                  title="讨论组成员"
+                  trigger="click"
+                  placement="bottomRight"
+                  content={
+                    <div style={{ width: 240, maxHeight: 360, overflowY: 'auto' }}>
+                      <List
+                        size="small"
+                        dataSource={members}
+                        locale={{ emptyText: '暂无成员' }}
+                        renderItem={(m: any) => {
+                          const isLeader = m.id === selectedGroup.leaderId;
+                          const isSelf = m.id === user?.id;
+                          const canRemove = selectedGroup.leaderId === user?.id && !isLeader;
+                          return (
+                            <List.Item
+                              style={{ padding: '6px 0' }}
+                              actions={canRemove ? [
+                                <Popconfirm
+                                  key="remove"
+                                  title={`确定移除${m.nickname || m.name || m.username}？`}
+                                  onConfirm={async () => {
+                                    try {
+                                      await removeMember(selectedGroupId!, m.id);
+                                      antMessage.success('已移除');
+                                      loadMembers(selectedGroupId!);
+                                    } catch (err: any) {
+                                      antMessage.error(err?.response?.data?.message || '移除失败');
+                                    }
+                                  }}
+                                  okText="确定"
+                                  cancelText="取消"
+                                >
+                                  <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+                                </Popconfirm>,
+                              ] : undefined}
+                            >
+                              <List.Item.Meta
+                                avatar={
+                                  <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: isLeader ? '#faad14' : '#1677ff' }} />
+                                }
+                                title={
+                                  <span>
+                                    {m.nickname || m.name || m.username || `用户${m.id}`}
+                                    {isLeader && <Tag color="gold" style={{ marginLeft: 6, fontSize: 11 }}>组长</Tag>}
+                                    {isSelf && <Tag color="blue" style={{ marginLeft: 4, fontSize: 11 }}>我</Tag>}
+                                  </span>
+                                }
+                              />
+                            </List.Item>
+                          );
+                        }}
+                      />
+                    </div>
+                  }
+                >
+                  <Tooltip title="成员">
+                    <Badge count={members.length} size="small" offset={[6, -4]} style={{ cursor: 'pointer' }}>
+                      <TeamOutlined style={{ fontSize: 18, color: '#8c8c8c', cursor: 'pointer' }} />
+                    </Badge>
+                  </Tooltip>
+                </Popover>
               </Space>
             </div>
 
@@ -825,6 +1104,7 @@ export default function DiscussionGroups() {
                 ) : (
                   messages.map((msg) => {
                     const isSelf = msg.senderId === user?.id;
+                    const isBot = msg.isBot || msg.senderName === 'AI助手';
                     return (
                       <div
                         key={msg.id}
@@ -838,18 +1118,19 @@ export default function DiscussionGroups() {
                           <Avatar
                             size={36}
                             style={{
-                              backgroundColor: '#1677ff',
+                              backgroundColor: isBot ? '#722ed1' : '#1677ff',
                               marginRight: 10,
                               flexShrink: 0,
                               marginTop: 2,
                             }}
-                            icon={<UserOutlined />}
-                            src={msg.senderAvatar || undefined}
+                            icon={isBot ? <RobotOutlined /> : <UserOutlined />}
+                            src={!isBot ? (msg.senderAvatar || undefined) : undefined}
                           />
                         )}
                         <div style={{ maxWidth: '65%' }}>
                           {!isSelf && (
-                            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                            <div style={{ fontSize: 12, color: isBot ? '#722ed1' : '#8c8c8c', marginBottom: 4 }}>
+                              {isBot && <RobotOutlined style={{ marginRight: 4 }} />}
                               {msg.senderName || `用户${msg.senderId}`}
                             </div>
                           )}
@@ -857,8 +1138,9 @@ export default function DiscussionGroups() {
                             style={{
                               padding: '10px 14px',
                               borderRadius: isSelf ? '12px 12px 2px 12px' : '12px 12px 12px 2px',
-                              background: isSelf ? '#1677ff' : '#fff',
+                              background: isSelf ? '#1677ff' : isBot ? '#f9f0ff' : '#fff',
                               color: isSelf ? '#fff' : '#333',
+                              border: isBot ? '1px solid #d3adf7' : 'none',
                               boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
                               wordBreak: 'break-word',
                               lineHeight: 1.6,
@@ -1041,7 +1323,7 @@ export default function DiscussionGroups() {
                   title={getRefItemLabel(refSelectType, item)}
                   description={
                     refSelectType === 'position'
-                      ? `${item.projectName || item.project?.name || ''} ${item.status || ''} ${item.workLocation || ''}`
+                      ? `${item.systemName || ''} ${item.projectName || item.project?.name || ''} ${item.status || ''} ${item.workLocation || ''}`
                       : refSelectType === 'candidate'
                       ? `${item.contactPhone || ''} ${item.positions?.[0]?.status || ''}`
                       : refSelectType === 'interview'
@@ -1142,6 +1424,72 @@ export default function DiscussionGroups() {
             </Descriptions.Item>
           </Descriptions>
         ) : null}
+      </Modal>
+
+      {/* 邀请成员弹窗 */}
+      <Modal
+        title="邀请讨论成员"
+        open={inviteModalOpen}
+        onOk={handleInviteConfirm}
+        onCancel={() => setInviteModalOpen(false)}
+        okText={`邀请 (${selectedInviteIds.length})`}
+        okButtonProps={{ disabled: selectedInviteIds.length === 0, loading: inviteSubmitting }}
+        width={520}
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Input.Search
+            placeholder="搜索用户名或姓名..."
+            value={inviteSearchKeyword}
+            onChange={(e) => setInviteSearchKeyword(e.target.value)}
+            onSearch={(val) => searchInviteUsers(val)}
+            enterButton
+          />
+        </div>
+        {members.length > 0 && (
+          <div style={{ marginBottom: 12, padding: '8px 12px', background: '#f6f6f6', borderRadius: 6 }}>
+            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>当前成员：</div>
+            <Space wrap size={[4, 4]}>
+              {members.map((m: any) => (
+                <Tag key={m.id} color="blue">{m.nickname || m.name || m.username}</Tag>
+              ))}
+            </Space>
+          </div>
+        )}
+        <Spin spinning={inviteUsersLoading}>
+          <List
+            dataSource={inviteUsers}
+            style={{ maxHeight: 350, overflow: 'auto' }}
+            locale={{ emptyText: '没有可邀请的用户' }}
+            renderItem={(item: any) => {
+              const isSelected = selectedInviteIds.includes(item.id);
+              return (
+                <List.Item
+                  onClick={() => {
+                    setSelectedInviteIds((prev) =>
+                      isSelected ? prev.filter((id) => id !== item.id) : [...prev, item.id]
+                    );
+                  }}
+                  style={{
+                    padding: '8px 12px',
+                    cursor: 'pointer',
+                    background: isSelected ? '#e6f4ff' : 'transparent',
+                    borderRadius: 6,
+                  }}
+                >
+                  <List.Item.Meta
+                    avatar={
+                      <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: isSelected ? '#1890ff' : '#87d068' }} />
+                    }
+                    title={item.nickname || item.name || item.username}
+                    description={`${item.username}${item.role ? ` · ${item.role}` : ''}`}
+                  />
+                  {isSelected && <Tag color="blue">已选</Tag>}
+                </List.Item>
+              );
+            }}
+          />
+        </Spin>
       </Modal>
     </div>
   );

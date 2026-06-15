@@ -27,7 +27,7 @@ export default function Login() {
     }
   };
 
-  const handleRegister = async (values: { username: string; password: string; name: string; role: string; adminKey?: string }) => {
+  const handleRegister = async (values: { username: string; password: string; name: string; role: string; employeeId?: string; adminKey?: string }) => {
     try {
       setLoading(true);
       const payload: any = { ...values };
@@ -58,14 +58,19 @@ export default function Login() {
         <Col xs={0} md={14}>
           <div style={{ color: '#fff' }}>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: 24 }}>
-              <RobotOutlined style={{ fontSize: 48, marginRight: 16 }} />
-              <Title level={2} style={{ color: '#fff', margin: 0 }}>
-                AI智能化岗位需求广场
-              </Title>
+              <span style={{
+                fontSize: 72,
+                fontFamily: '"Zhi Mang Xing", "Liu Jian Mao Cao", cursive',
+                fontWeight: 400,
+                color: '#fff',
+                letterSpacing: 16,
+                textShadow: '0 4px 30px rgba(255,255,255,0.4)',
+              }}>
+                汇流
+              </span>
             </div>
             <Paragraph style={{ color: 'rgba(255,255,255,0.85)', fontSize: 16, lineHeight: 1.8 }}>
-              基于 AI 技术的智能化项目岗位需求管理平台，为您提供智能简历解析、岗位匹配分析、
-              面试问题生成、招聘风险预警等全方位 AI 赋能服务，让招聘更高效、更精准。
+              打通项目间信息壁垒，让岗位需求在部门间畅通流转，AI驱动招聘需求及时满足。
             </Paragraph>
             <div style={{ display: 'flex', gap: 24, marginTop: 32 }}>
               {['智能匹配', '风险分析', '简历解析', '面试助手'].map((item) => (
@@ -94,7 +99,17 @@ export default function Login() {
             }}
           >
             <div style={{ textAlign: 'center', marginBottom: 32 }}>
-              <RobotOutlined style={{ fontSize: 40, color: '#667eea' }} />
+              <span style={{
+                fontSize: 48,
+                fontFamily: '"Zhi Mang Xing", "Liu Jian Mao Cao", cursive',
+                fontWeight: 400,
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                WebkitBackgroundClip: 'text',
+                WebkitTextFillColor: 'transparent',
+                letterSpacing: 10,
+              }}>
+                汇流
+              </span>
               <Title level={3} style={{ marginTop: 12, marginBottom: 4 }}>
                 {isRegister ? '注册账号' : '欢迎登录'}
               </Title>
@@ -113,6 +128,9 @@ export default function Login() {
                 </Form.Item>
                 <Form.Item name="name" rules={[{ required: true, message: '请输入姓名' }]}>
                   <Input prefix={<TeamOutlined />} placeholder="姓名" />
+                </Form.Item>
+                <Form.Item name="employeeId" rules={[{ required: true, message: '请输入员工ID' }]}>
+                  <Input prefix={<SafetyOutlined />} placeholder="员工ID（唯一标识）" />
                 </Form.Item>
                 <Form.Item name="password" rules={[
                   { required: true, message: '请输入密码' },

@@ -86,6 +86,7 @@ async function deploy() {
 
         // 3. Install deps and restart
         console.log('[Deploy] Installing dependencies...');
+        await execCommand(`cd ${BACKEND_REMOTE} && rm -rf node_modules/pdf-parse`);
         const installResult = await execCommand(`cd ${BACKEND_REMOTE} && npm install --production 2>&1 | tail -3`);
         console.log('[Deploy] npm install:', installResult.output.trim());
 

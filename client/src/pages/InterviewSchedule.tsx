@@ -7,6 +7,7 @@ import { getInterviews, createInterview, updateInterview, Interview } from '../a
 import { getPositions } from '../api/position';
 import { getProjects } from '../api/project';
 import { getCandidatesGrouped } from '../api/candidate';
+import ShareToDiscussion from '../components/ShareToDiscussion';
 
 const INTERVIEW_TYPE_MAP: Record<string, string> = {
   online: '线上',
@@ -39,6 +40,7 @@ export default function InterviewSchedule() {
   const [modalProjectId, setModalProjectId] = useState<number | undefined>();
   const [modalPositionId, setModalPositionId] = useState<number | undefined>();
   const [filterProjectId, setFilterProjectId] = useState<number | undefined>();
+  const [filterPositionId, setFilterPositionId] = useState<number | undefined>();
   const [filterResult, setFilterResult] = useState<string | undefined>();
 
   // 创建面试弹窗
@@ -71,6 +73,11 @@ export default function InterviewSchedule() {
     ? positions.filter((p: any) => p.projectId === modalProjectId)
     : positions;
 
+  // 列表筛选：按项目筛选岗位
+  const filterPositions = filterProjectId
+    ? positions.filter((p: any) => p.projectId === filterProjectId)
+    : positions;
+
   // 新建弹窗：按项目/岗位筛选候选人
   const filteredCandidates = candidates.filter((c: any) => {
     if (!modalProjectId && !modalPositionId) return true;
@@ -89,6 +96,7 @@ export default function InterviewSchedule() {
       const res: any = await getInterviews({
         result: filterResult,
         projectId: filterProjectId,
+        positionId: filterPositionId,
       });
       setInterviews(res.data || res || []);
     } catch {
@@ -96,7 +104,7 @@ export default function InterviewSchedule() {
     } finally {
       setLoading(false);
     }
-  }, [filterResult, filterProjectId]);
+  }, [filterResult, filterProjectId, filterPositionId]);
 
   useEffect(() => {
     loadData();
@@ -260,10 +268,20 @@ export default function InterviewSchedule() {
           <Select
             placeholder="筛选项目"
             value={filterProjectId}
-            onChange={setFilterProjectId}
+            onChange={(v) => { setFilterProjectId(v); setFilterPositionId(undefined); }}
             allowClear
             style={{ width: 180 }}
             options={projects.map((p: any) => ({ value: p.id, label: p.name }))}
+          />
+          <Select
+            placeholder="筛选岗位"
+            value={filterPositionId}
+            onChange={setFilterPositionId}
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            style={{ width: 200 }}
+            options={filterPositions.map((p: any) => ({ value: p.id, label: p.positionDuty || p.systemName || `岗位#${p.id}` }))}
           />
           <Select
             placeholder="筛选面试结果"
@@ -273,7 +291,7 @@ export default function InterviewSchedule() {
             style={{ width: 150 }}
             options={Object.entries(RESULT_MAP).map(([value, { label }]) => ({ value, label }))}
           />
-          <Button onClick={() => { setFilterProjectId(undefined); setFilterResult(undefined); }}>
+          <Button onClick={() => { setFilterProjectId(undefined); setFilterPositionId(undefined); setFilterResult(undefined); }}>
             重置
           </Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateModalOpen(true); setModalProjectId(undefined); setModalPositionId(undefined); setSelectedCandidate(null); setCandidatePositionOptions([]); }}>
@@ -400,7 +418,25 @@ export default function InterviewSchedule() {
         title="面试详情"
         open={detailModalOpen}
         onCancel={() => { setDetailModalOpen(false); setDetailInterview(null); }}
-        footer={null}
+        footer={detailInterview ? (
+          <ShareToDiscussion
+            referenceType="interview"
+            referenceId={detailInterview.id}
+            referenceData={{
+              id: detailInterview.id,
+              interviewType: detailInterview.interviewType,
+              scheduledAt: detailInterview.scheduledAt,
+              meetingLink: detailInterview.meetingLink,
+              result: detailInterview.result,
+              candidateName: detailInterview.candidatePosition?.candidate?.name,
+              candidateId: detailInterview.candidatePosition?.candidate?.id,
+              positionName: detailInterview.candidatePosition?.position?.positionDuty || detailInterview.candidatePosition?.positionTitle,
+              projectId: detailInterview.candidatePosition?.position?.projectId || detailInterview.candidatePosition?.position?.project?.id,
+              positionId: detailInterview.candidatePosition?.position?.id,
+            }}
+            label={`${detailInterview.candidatePosition?.candidate?.name || '未知'} - ${INTERVIEW_TYPE_MAP[detailInterview.interviewType] || detailInterview.interviewType || '面试'}`}
+          />
+        ) : null}
         width={640}
         destroyOnClose
       >

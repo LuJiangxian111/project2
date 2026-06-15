@@ -26,7 +26,7 @@ export class CandidatePosition {
   @Column({ name: 'position_id' })
   positionId: number;
 
-  @ManyToOne(() => Position, (position) => position.candidatePositions)
+  @ManyToOne(() => Position, (position) => position.candidatePositions, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'position_id' })
   position: Position;
 

@@ -89,4 +89,13 @@ export class DiscussionController {
   ) {
     return this.discussionService.getMembers(groupId);
   }
+
+  // 解散讨论组（仅创建者可操作）
+  @Delete(':groupId')
+  async dissolveGroup(
+    @Param('groupId', ParseIntPipe) groupId: number,
+    @CurrentUser() user: any,
+  ) {
+    return this.discussionService.dissolveGroup(groupId, user.id);
+  }
 }

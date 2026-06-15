@@ -8,42 +8,30 @@ import { Project } from '../../entities/project.entity';
 import { CandidatePosition } from '../../entities/candidate-position.entity';
 import { Interview } from '../../entities/interview.entity';
 import { LogService } from '../log/log.service';
+import { SystemConfigService } from '../system-config/system-config.service';
 import OpenAI from 'openai';
+import {
+  SkillRegistry,
+  SkillContext,
+  ProjectSkill,
+  PositionSkill,
+  CandidateSkill,
+  AssignmentSkill,
+  InterviewSkill,
+  ResumeSkill,
+  ExportSkill,
+  DashboardSkill,
+  AnalysisSkill,
+} from './skills';
 
 const DEFAULT_LLM_BASE_URL = process.env.LLM_BASE_URL || 'https://api.openai.com/v1';
 const DEFAULT_LLM_API_KEY = process.env.LLM_API_KEY || '';
 const DEFAULT_LLM_MODEL = process.env.LLM_MODEL || 'gpt-3.5-turbo';
 
-// 将Excel日期序列号转换为正常日期字符串
-function convertExcelDate(value: any): string | null {
-  if (value === null || value === undefined || value === '') return null;
-  const str = String(value).trim();
-
-  // 已经是正常日期格式（如 2024-01-15, 2024/01/15）
-  if (/^\d{4}[-/]\d{1,2}[-/]\d{1,2}/.test(str)) {
-    return str.replace(/\//g, '-').substring(0, 10);
-  }
-
-  // Excel日期序列号（纯数字，如 44368 表示 2021-06-17）
-  const num = Number(str);
-  if (!isNaN(num) && num > 1000 && num < 100000) {
-    // Excel的日期起点是1900-01-01，但有一个闰年bug（1900-02-29不存在但Excel认为存在）
-    // 所以序列号 >= 60 时需要减1天
-    const epoch = new Date(1899, 11, 30); // 1899-12-30
-    const date = new Date(epoch.getTime() + num * 86400000);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`;
-  }
-
-  // 无法识别的格式，返回null避免数据库报错
-  return null;
-}
-
 @Injectable()
 export class AiService {
   private currentSavedFiles: { fileName: string; savedUrl: string; size: number }[] = [];
+  private skillRegistry: SkillRegistry;
 
   constructor(
     @InjectRepository(User)
@@ -59,16 +47,49 @@ export class AiService {
     @InjectRepository(Interview)
     private interviewRepository: Repository<Interview>,
     private logService: LogService,
-  ) {}
+    private systemConfigService: SystemConfigService,
+  ) {
+    // 初始化 Skill 注册表
+    this.skillRegistry = new SkillRegistry();
+    this.skillRegistry.register(new ProjectSkill());
+    this.skillRegistry.register(new PositionSkill());
+    this.skillRegistry.register(new CandidateSkill());
+    this.skillRegistry.register(new AssignmentSkill());
+    this.skillRegistry.register(new InterviewSkill());
+    this.skillRegistry.register(new ResumeSkill());
+    this.skillRegistry.register(new ExportSkill());
+    this.skillRegistry.register(new DashboardSkill());
+    this.skillRegistry.register(new AnalysisSkill());
+    console.log(`[AI] Skills 注册完成: ${this.skillRegistry.getRegisteredSkills().join(', ')}`);
+    console.log(`[AI] 可用工具: ${this.skillRegistry.getToolNames().join(', ')}`);
+  }
 
   private async getClient(userId: number): Promise<{
     client: OpenAI;
     model: string;
   }> {
     const user = await this.userRepository.findOne({ where: { id: userId } });
-    const apiKey = user?.llmApiKey || DEFAULT_LLM_API_KEY;
-    const baseURL = user?.llmBaseUrl || DEFAULT_LLM_BASE_URL;
-    const model = user?.llmModel || DEFAULT_LLM_MODEL;
+    const systemLlm = await this.systemConfigService.getLlmConfig();
+
+    // 用户选择使用系统内置AI，或者用户没有自定义配置时使用系统配置
+    const useSystemLlm = user?.useSystemLlm !== false; // 默认使用系统配置
+    const hasUserConfig = !!(user?.llmApiKey);
+
+    let apiKey: string;
+    let baseURL: string;
+    let model: string;
+
+    if (useSystemLlm || !hasUserConfig) {
+      // 使用系统内置AI配置
+      apiKey = systemLlm.apiKey || DEFAULT_LLM_API_KEY;
+      baseURL = systemLlm.baseUrl || DEFAULT_LLM_BASE_URL;
+      model = systemLlm.model || DEFAULT_LLM_MODEL;
+    } else {
+      // 使用用户自定义AI配置
+      apiKey = user.llmApiKey || systemLlm.apiKey || DEFAULT_LLM_API_KEY;
+      baseURL = user.llmBaseUrl || systemLlm.baseUrl || DEFAULT_LLM_BASE_URL;
+      model = user.llmModel || systemLlm.model || DEFAULT_LLM_MODEL;
+    }
 
     const client = new OpenAI({
       apiKey,
@@ -109,11 +130,17 @@ export class AiService {
 - name: 姓名
 - phone: 电话
 - email: 邮箱
-- yearsOfExperience: 工作年限
-- currentCompany: 当前公司
+- gender: 性别（男/女）
+- yearsOfExperience: 工作年限（数字）
+- currentCompany: 当前公司/供应商
 - skills: 技能列表(数组)
-- education: 学历
+- education: 学历（如：本科、硕士、大专）
+- educationType: 学历类型（如：统招、自考、成教）
+- workStatus: 工作状态（如：在职、离职、待业）
+- expectedSalary: 期望薪资
 - summary: 简历摘要
+
+请确保name和phone字段准确提取，这是最重要的两个字段。如果无法确定某个字段，请返回空字符串。
 
 简历内容：
 ${fileContent}`;
@@ -230,18 +257,54 @@ ${fileContent}`;
 交付形式: ${position.deliveryForm}
 紧急程度: ${position.urgency}`;
 
-    const prompt = `请分析以下候选人与岗位的匹配度，重点结合候选人简历内容与岗位任职要求进行深入分析，返回JSON格式：
+    const prompt = `你是一名资深技术招聘专家，请对以下候选人与岗位进行深度匹配分析。
+
+请按以下步骤逐步分析（Chain-of-Thought）：
+
+第一步：提取岗位核心要求
+- 从岗位任职要求和岗位职责中提取必须技能（Must-have）和加分技能（Nice-to-have）
+- 识别最低学历要求、经验年限要求、领域要求
+
+第二步：分析候选人资质
+- 从简历内容中提取候选人的核心技能、项目经验、教育背景
+- 识别与岗位相关的关键经历和成就
+
+第三步：逐项匹配对比
+- 技能匹配：候选人技能覆盖了哪些必须技能和加分技能，缺失哪些
+- 经验匹配：候选人的工作年限、项目经验是否满足岗位要求
+- 学历匹配：候选人学历是否达到岗位要求
+- 领域匹配：候选人所在行业/技术领域与岗位的契合度
+
+第四步：综合评估
+- 根据以上分析给出匹配分数和详细评价
+
+请严格返回以下JSON格式（不要包含其他文字）：
 {
-  "score": 匹配分数(0-100的整数),
+  "score": 匹配分数(0-100的整数，基于以下权重：技能匹配40%+经验匹配25%+学历匹配15%+领域匹配20%),
   "detail": {
-    "skillMatch": 技能匹配分析,
-    "experienceMatch": 经验匹配分析,
-    "educationMatch": 学历匹配分析,
-    "resumeAnalysis": 简历内容与岗位要求的匹配分析,
-    "overallAnalysis": 综合分析,
-    "strengths": ["优势1", "优势2"],
+    "skillMatch": {
+      "score": 技能匹配分(0-100),
+      "analysis": "技能匹配分析说明",
+      "matchedSkills": ["已匹配的技能1", "已匹配的技能2"],
+      "missingSkills": ["缺失的技能1", "缺失的技能2"]
+    },
+    "experienceMatch": {
+      "score": 经验匹配分(0-100),
+      "analysis": "经验匹配分析说明",
+      "relevantExperience": ["相关经验1", "相关经验2"]
+    },
+    "educationMatch": {
+      "score": 学历匹配分(0-100),
+      "analysis": "学历匹配分析说明"
+    },
+    "domainMatch": {
+      "score": 领域匹配分(0-100),
+      "analysis": "领域匹配分析说明"
+    },
+    "overallAnalysis": "综合分析总结（100-200字）",
+    "strengths": ["优势1", "优势2", "优势3"],
     "weaknesses": ["不足1", "不足2"],
-    "suggestions": "建议"
+    "suggestions": "改进建议"
   }
 }
 
@@ -688,577 +751,8 @@ ${fileContent}`;
     // 存储已保存的文件信息，供工具使用
     this.currentSavedFiles = savedFiles || [];
 
-    const tools = [
-      // ===== Project tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'list_projects',
-          description: '获取项目列表',
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'create_project',
-          description: '创建新项目',
-          parameters: {
-            type: 'object',
-            properties: {
-              name: { type: 'string', description: '项目名称' },
-              description: { type: 'string', description: '项目描述' },
-              status: { type: 'string', enum: ['planning', 'active', 'completed', 'paused'], description: '项目状态' },
-            },
-            required: ['name'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'update_project',
-          description: '更新项目信息',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '项目ID' },
-              name: { type: 'string', description: '项目名称' },
-              description: { type: 'string', description: '项目描述' },
-              status: { type: 'string', enum: ['planning', 'active', 'completed', 'paused'], description: '项目状态' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'delete_project',
-          description: '删除项目',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '项目ID' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      // ===== Position tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'list_positions',
-          description: '获取岗位列表，可按项目ID筛选。返回包含需求编号、岗位职务、部门等完整信息。',
-          parameters: {
-            type: 'object',
-            properties: {
-              projectId: { type: 'number', description: '项目ID（可选）' },
-            },
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'search_positions',
-          description: '按需求编号、岗位职务、部门等关键词搜索岗位。当用户提供需求编号（如R2508209923）或岗位名称时使用此工具。',
-          parameters: {
-            type: 'object',
-            properties: {
-              requirementNumber: { type: 'string', description: '需求编号（如R2508209923）' },
-              positionDuty: { type: 'string', description: '岗位职务关键词' },
-              department: { type: 'string', description: '部门关键词' },
-              systemName: { type: 'string', description: '系统名称关键词' },
-            },
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'create_position',
-          description: '创建新岗位需求',
-          parameters: {
-            type: 'object',
-            properties: {
-              systemName: { type: 'string', description: '系统名称' },
-              department: { type: 'string', description: '部门' },
-              positionDuty: { type: 'string', description: '岗位职务' },
-              positionType: { type: 'string', description: '岗位类型' },
-              techDomain: { type: 'string', description: '技术领域' },
-              urgency: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: '紧急程度' },
-              requiredCount: { type: 'number', description: '需求人数' },
-              region: { type: 'string', description: '地区' },
-              projectId: { type: 'number', description: '所属项目ID' },
-            },
-            required: ['systemName', 'department', 'positionDuty', 'projectId'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'update_position',
-          description: '更新岗位信息',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '岗位ID' },
-              systemName: { type: 'string', description: '系统名称' },
-              department: { type: 'string', description: '部门' },
-              positionDuty: { type: 'string', description: '岗位职务' },
-              positionType: { type: 'string', description: '岗位类型' },
-              techDomain: { type: 'string', description: '技术领域' },
-              urgency: { type: 'string', enum: ['low', 'medium', 'high', 'critical'], description: '紧急程度' },
-              requiredCount: { type: 'number', description: '需求人数' },
-              region: { type: 'string', description: '地区' },
-              status: { type: 'string', enum: ['open', 'partial', 'filled', 'closed'], description: '岗位状态' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'delete_position',
-          description: '删除岗位',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '岗位ID' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'get_position_detail',
-          description: '获取岗位详细信息，包括已分配的候选人列表',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '岗位ID' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'import_positions_from_data',
-          description: '智能批量导入岗位数据。系统会自动进行字段映射，将Excel列名匹配到系统标准字段（如"岗位/职位"→positionDuty, "岗位类型"→positionType, "需求人数"→requiredCount等）。传入原始数据即可，无需手动映射字段名。支持所有岗位字段：systemName(系统), department(部门), requirementNumber(需求编号), positionType(岗位类型), positionDuty(岗位职务), techDomain(技术领域), majorType(专业类型), levelDistribution(职级分布), salaryRange(薪资范围), requirements(岗位要求), responsibilities(岗位职责), domainExperience(领域经验), region(地区), deliveryForm(交付形式), positionImplementation(岗位实施), urgency(紧急程度), requiredCount(需求人数), expectedDate(期望到岗日期)。',
-          parameters: {
-            type: 'object',
-            properties: {
-              projectId: { type: 'number', description: '所属项目ID' },
-              items: {
-                type: 'array',
-                description: '岗位数据数组，每条记录是一个对象，键名可以是Excel原始列名或系统标准字段名，系统会自动映射',
-                items: {
-                  type: 'object',
-                  properties: {
-                    systemName: { type: 'string', description: '系统名称' },
-                    department: { type: 'string', description: '部门' },
-                    requirementNumber: { type: 'string', description: '需求编号' },
-                    positionDuty: { type: 'string', description: '岗位职务' },
-                    positionType: { type: 'string', description: '岗位类型' },
-                    techDomain: { type: 'string', description: '技术领域' },
-                    majorType: { type: 'string', description: '专业类型' },
-                    levelDistribution: { type: 'string', description: '职级分布' },
-                    salaryRange: { type: 'string', description: '薪资范围' },
-                    requirements: { type: 'string', description: '岗位要求' },
-                    responsibilities: { type: 'string', description: '岗位职责' },
-                    domainExperience: { type: 'string', description: '领域经验' },
-                    region: { type: 'string', description: '地区' },
-                    deliveryForm: { type: 'string', description: '交付形式' },
-                    positionImplementation: { type: 'string', description: '岗位实施' },
-                    urgency: { type: 'string', description: '紧急程度(low/medium/high/critical)' },
-                    requiredCount: { type: 'number', description: '需求人数' },
-                    expectedDate: { type: 'string', description: '期望到岗日期' },
-                  },
-                },
-              },
-            },
-            required: ['projectId', 'items'],
-          },
-        },
-      },
-      // ===== Candidate tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'list_candidates',
-          description: '获取候选人列表，返回包含姓名、学历、领域年限等完整信息',
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'search_candidates',
-          description: '按姓名、手机号、邮箱等关键词搜索候选人',
-          parameters: {
-            type: 'object',
-            properties: {
-              name: { type: 'string', description: '姓名关键词' },
-              phone: { type: 'string', description: '手机号' },
-              email: { type: 'string', description: '邮箱' },
-              supplier: { type: 'string', description: '供应商关键词' },
-            },
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'create_candidate',
-          description: '添加新候选人',
-          parameters: {
-            type: 'object',
-            properties: {
-              name: { type: 'string', description: '姓名' },
-              gender: { type: 'string', description: '性别' },
-              phone: { type: 'string', description: '联系电话' },
-              email: { type: 'string', description: '邮箱' },
-              education: { type: 'string', description: '学历' },
-              domainYears: { type: 'string', description: '领域年限' },
-              workStatus: { type: 'string', description: '工作状态' },
-              expectedSalary: { type: 'string', description: '期望薪资' },
-              supplier: { type: 'string', description: '供应商' },
-            },
-            required: ['name'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'update_candidate',
-          description: '更新候选人信息',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '候选人ID' },
-              name: { type: 'string', description: '姓名' },
-              gender: { type: 'string', description: '性别' },
-              phone: { type: 'string', description: '联系电话' },
-              email: { type: 'string', description: '邮箱' },
-              education: { type: 'string', description: '学历' },
-              domainYears: { type: 'string', description: '领域年限' },
-              workStatus: { type: 'string', description: '工作状态' },
-              expectedSalary: { type: 'string', description: '期望薪资' },
-              supplier: { type: 'string', description: '供应商' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'delete_candidate',
-          description: '删除候选人',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '候选人ID' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'get_candidate_detail',
-          description: '获取候选人详细信息',
-          parameters: {
-            type: 'object',
-            properties: {
-              id: { type: 'number', description: '候选人ID' },
-            },
-            required: ['id'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'import_candidates_from_data',
-          description: '智能批量导入候选人数据。系统会自动进行字段映射，将Excel列名匹配到系统标准字段（如"姓名"→name, "手机"→contactPhone, "邮箱"→contactEmail等）。传入原始数据即可，无需手动映射字段名。',
-          parameters: {
-            type: 'object',
-            properties: {
-              items: {
-                type: 'array',
-                description: '候选人数据数组，每条记录是一个对象，键名可以是Excel原始列名或系统标准字段名，系统会自动映射',
-                items: {
-                  type: 'object',
-                  properties: {
-                    name: { type: 'string', description: '姓名' },
-                    gender: { type: 'string', description: '性别' },
-                    idType: { type: 'string', description: '证件类型' },
-                    idNumber: { type: 'string', description: '证件号码' },
-                    contactPhone: { type: 'string', description: '联系电话' },
-                    contactEmail: { type: 'string', description: '联系邮箱' },
-                    areaCode: { type: 'string', description: '区号' },
-                    educationType: { type: 'string', description: '学历类型' },
-                    education: { type: 'string', description: '学历' },
-                    domainYears: { type: 'string', description: '领域年限' },
-                    workStatus: { type: 'string', description: '工作状态' },
-                    expectedSalary: { type: 'string', description: '期望薪资' },
-                    supplier: { type: 'string', description: '供应商' },
-                    recommender: { type: 'string', description: '推荐人' },
-                    recommendReason: { type: 'string', description: '推荐理由' },
-                  },
-                },
-              },
-            },
-            required: ['items'],
-          },
-        },
-      },
-      // ===== Assignment/Matching tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'assign_candidate_to_position',
-          description: '将候选人分配到岗位',
-          parameters: {
-            type: 'object',
-            properties: {
-              candidateId: { type: 'number', description: '候选人ID' },
-              positionId: { type: 'number', description: '岗位ID' },
-            },
-            required: ['candidateId', 'positionId'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'list_position_candidates',
-          description: '获取岗位的候选人列表，包含候选人姓名和当前状态',
-          parameters: {
-            type: 'object',
-            properties: {
-              positionId: { type: 'number', description: '岗位ID' },
-            },
-            required: ['positionId'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'update_candidate_status',
-          description: '更新候选人在岗位中的状态。状态可选值：pending_screen(待筛选)、screen_rejected(筛选未通过)、screen_passed(筛选通过)、pending_interview(待面试)、interview_passed(面试通过)、interview_rejected(面试未通过)、abandoned(已放弃)、pending_onboard(待入职)、onboarded(已入职)。支持批量更新，传入candidateIds数组可同时更新多个候选人。',
-          parameters: {
-            type: 'object',
-            properties: {
-              candidateIds: { type: 'array', items: { type: 'number' }, description: '候选人ID数组，支持批量' },
-              positionId: { type: 'number', description: '岗位ID' },
-              status: { type: 'string', description: '新状态，如：interview_passed、screen_rejected、onboarded等' },
-            },
-            required: ['candidateIds', 'positionId', 'status'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'match_candidate',
-          description: 'AI匹配候选人与岗位',
-          parameters: {
-            type: 'object',
-            properties: {
-              candidateId: { type: 'number', description: '候选人ID' },
-              positionId: { type: 'number', description: '岗位ID' },
-            },
-            required: ['candidateId', 'positionId'],
-          },
-        },
-      },
-      // ===== Interview tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'list_interviews',
-          description: '获取面试列表',
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'schedule_interview',
-          description: '智能安排面试。根据候选人姓名或电话查找候选人，根据项目和岗位信息定位候选人岗位关联，然后创建面试安排。如果找不到候选人或岗位关联，会返回错误提示需要补充信息。',
-          parameters: {
-            type: 'object',
-            properties: {
-              candidateName: { type: 'string', description: '候选人姓名' },
-              candidatePhone: { type: 'string', description: '候选人电话号码（可选，用于精确匹配）' },
-              projectName: { type: 'string', description: '项目名称（可选）' },
-              positionName: { type: 'string', description: '岗位名称/岗位职务（可选）' },
-              interviewType: { type: 'string', enum: ['online', 'onsite', 'phone', 'video'], description: '面试形式：online=线上, onsite=现场, phone=电话, video=视频' },
-              interviewDate: { type: 'string', description: '面试日期时间，如2024-01-15T10:00:00 或 2024-01-15 10:00' },
-              round: { type: 'number', description: '面试轮次，默认1' },
-              meetingLink: { type: 'string', description: '会议链接或面试地点信息（可选）' },
-            },
-            required: ['candidateName', 'interviewType', 'interviewDate'],
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'create_interview',
-          description: '通过候选人ID和岗位ID直接创建面试安排（需要已知精确ID时使用）',
-          parameters: {
-            type: 'object',
-            properties: {
-              candidateId: { type: 'number', description: '候选人ID' },
-              positionId: { type: 'number', description: '岗位ID' },
-              interviewDate: { type: 'string', description: '面试日期时间，如2024-01-15T10:00:00' },
-              round: { type: 'number', description: '面试轮次' },
-              interviewerId: { type: 'number', description: '面试官用户ID' },
-              interviewType: { type: 'string', description: '面试形式：online/onsite/phone/video' },
-              meetingLink: { type: 'string', description: '会议链接或面试地点信息' },
-            },
-            required: ['candidateId', 'positionId', 'interviewDate', 'round'],
-          },
-        },
-      },
-      // ===== Export tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'export_positions_csv',
-          description: '导出岗位数据为CSV格式',
-          parameters: {
-            type: 'object',
-            properties: {
-              projectId: { type: 'number', description: '项目ID（可选，筛选指定项目的岗位）' },
-            },
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'export_candidates_csv',
-          description: '导出候选人数据为CSV格式',
-          parameters: {
-            type: 'object',
-            properties: {
-              projectId: { type: 'number', description: '项目ID（可选，筛选指定项目的候选人）' },
-              positionId: { type: 'number', description: '岗位ID（可选，筛选指定岗位的候选人）' },
-            },
-          },
-        },
-      },
-      // ===== Resume upload tool =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'upload_candidate_resume',
-          description: '为候选人上传简历文件。根据候选人姓名匹配候选人，将简历文件保存到服务器并更新候选人的简历链接。如果候选人已有简历，新简历将覆盖旧简历。支持批量上传，传入resumes数组每个元素包含candidateName和resumeUrl（已保存的文件路径）。resumeUrl请使用系统提供的保存路径。',
-          parameters: {
-            type: 'object',
-            properties: {
-              resumes: {
-                type: 'array',
-                description: '简历上传信息数组',
-                items: {
-                  type: 'object',
-                  properties: {
-                    candidateName: { type: 'string', description: '候选人姓名' },
-                    resumeUrl: { type: 'string', description: '已保存的简历文件路径，如/uploads/resumes/xxx.pdf' },
-                    positionId: { type: 'number', description: '岗位ID（可选）' },
-                  },
-                  required: ['candidateName', 'resumeUrl'],
-                },
-              },
-            },
-            required: ['resumes'],
-          },
-        },
-      },
-      // ===== Interview scheduling tool =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'schedule_interview',
-          description: '为候选人安排面试。会自动将候选人状态更新为待面试，并通知候选人上传者。面试状态：pending(待面试)、pass(面试通过)、fail(面试不通过)、cancel(放弃面试)。',
-          parameters: {
-            type: 'object',
-            properties: {
-              candidatePositionId: { type: 'number', description: '候选人-岗位关联ID（candidate_position的id）' },
-              interviewType: { type: 'string', description: '面试形式：online(线上)、onsite(现场)、phone(电话)、video(视频)', enum: ['online', 'onsite', 'phone', 'video'] },
-              scheduledAt: { type: 'string', description: '面试时间，格式：YYYY-MM-DD HH:mm' },
-              meetingLink: { type: 'string', description: '会议链接/信息（如腾讯会议链接、面试地点等）' },
-              round: { type: 'number', description: '面试轮次，默认1' },
-            },
-            required: ['candidatePositionId', 'interviewType', 'scheduledAt'],
-          },
-        },
-      },
-      // ===== Dashboard/Stats tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'get_dashboard_stats',
-          description: '获取仪表盘统计数据，包括项目数、岗位数、候选人数等',
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-      },
-      // ===== AI tools =====
-      {
-        type: 'function' as const,
-        function: {
-          name: 'analyze_risk',
-          description: '分析招聘风险',
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-      },
-      {
-        type: 'function' as const,
-        function: {
-          name: 'generate_report',
-          description: '生成招聘报告',
-          parameters: {
-            type: 'object',
-            properties: {
-              type: { type: 'string', enum: ['position', 'project'], description: '报告类型' },
-              positionId: { type: 'number', description: '岗位ID（type为position时必填）' },
-              projectId: { type: 'number', description: '项目ID（type为project时必填）' },
-            },
-            required: ['type'],
-          },
-        },
-      },
-    ];
+    // 从 Skill 注册表获取所有工具定义
+    const tools = this.skillRegistry.getAllToolDefinitions();
 
     const systemMessage = {
       role: 'system' as const,
@@ -1344,7 +838,23 @@ Excel文件处理规则（非常重要）：
 
         try {
           const args = JSON.parse(toolCall.function.arguments);
-          functionResult = await this.executeToolCall(functionName, args, userId);
+          const context: SkillContext = {
+            userId,
+            projectRepository: this.projectRepository,
+            positionRepository: this.positionRepository,
+            candidateRepository: this.candidateRepository,
+            candidatePositionRepository: this.candidatePositionRepository,
+            interviewRepository: this.interviewRepository,
+            userRepository: this.userRepository,
+            logService: this.logService,
+            savedFiles: this.currentSavedFiles,
+            aiService: {
+              matchCandidate: this.matchCandidate.bind(this),
+              analyzeRisk: this.analyzeRisk.bind(this),
+              generateReport: this.generateReport.bind(this),
+            },
+          };
+          functionResult = await this.skillRegistry.execute(functionName, args, context);
         } catch (err: any) {
           functionResult = { error: err.message || '执行失败' };
         }
@@ -1380,926 +890,6 @@ Excel文件处理规则（非常重要）：
       model: response.model,
       usage: response.usage,
     };
-  }
-
-  private async executeToolCall(functionName: string, args: any, userId: number): Promise<any> {
-    switch (functionName) {
-      // ===== Project tools =====
-      case 'list_projects': {
-        const projects = await this.projectRepository.find({ order: { createdAt: 'DESC' } });
-        return projects.map(p => ({ id: p.id, name: p.name, status: p.status, description: p.description }));
-      }
-      case 'create_project': {
-        const project = this.projectRepository.create({
-          name: args.name,
-          description: args.description || '',
-          status: args.status || 'planning',
-          managerId: userId,
-        });
-        const result = await this.projectRepository.save(project);
-        return { id: result.id, name: result.name, status: result.status, message: '项目创建成功' };
-      }
-      case 'update_project': {
-        const project = await this.projectRepository.findOne({ where: { id: args.id } });
-        if (!project) return { error: '项目不存在' };
-        if (args.name !== undefined) project.name = args.name;
-        if (args.description !== undefined) project.description = args.description;
-        if (args.status !== undefined) project.status = args.status;
-        const result = await this.projectRepository.save(project);
-        return { id: result.id, name: result.name, status: result.status, message: '项目更新成功' };
-      }
-      case 'delete_project': {
-        const project = await this.projectRepository.findOne({ where: { id: args.id } });
-        if (!project) return { error: '项目不存在' };
-        await this.projectRepository.remove(project);
-        return { id: args.id, message: '项目删除成功' };
-      }
-      // ===== Position tools =====
-      case 'list_positions': {
-        const where: any = {};
-        if (args.projectId) where.projectId = args.projectId;
-        const positions = await this.positionRepository.find({ where, order: { createdAt: 'DESC' } });
-        return positions.map(p => ({
-          id: p.id, requirementNumber: p.requirementNumber, systemName: p.systemName,
-          positionDuty: p.positionDuty, department: p.department, urgency: p.urgency,
-          status: p.status, requiredCount: p.requiredCount, hiredCount: p.hiredCount,
-          region: p.region, positionType: p.positionType, techDomain: p.techDomain,
-          salaryRange: p.salaryRange, projectId: p.projectId, deliveryForm: p.deliveryForm,
-        }));
-      }
-      case 'search_positions': {
-        const qb = this.positionRepository.createQueryBuilder('p');
-        if (args.requirementNumber) qb.andWhere('p.requirement_number LIKE :rn', { rn: `%${args.requirementNumber}%` });
-        if (args.positionDuty) qb.andWhere('p.position_duty LIKE :pd', { pd: `%${args.positionDuty}%` });
-        if (args.department) qb.andWhere('p.department LIKE :dep', { dep: `%${args.department}%` });
-        if (args.systemName) qb.andWhere('p.system_name LIKE :sn', { sn: `%${args.systemName}%` });
-        qb.orderBy('p.created_at', 'DESC').limit(50);
-        const positions = await qb.getMany();
-        return positions.map(p => ({
-          id: p.id, requirementNumber: p.requirementNumber, systemName: p.systemName,
-          positionDuty: p.positionDuty, department: p.department, urgency: p.urgency,
-          status: p.status, requiredCount: p.requiredCount, hiredCount: p.hiredCount,
-          region: p.region, positionType: p.positionType, techDomain: p.techDomain,
-          salaryRange: p.salaryRange, projectId: p.projectId, deliveryForm: p.deliveryForm,
-          requirements: p.requirements, responsibilities: p.responsibilities,
-          domainExperience: p.domainExperience,
-        }));
-      }
-      case 'create_position': {
-        const position = this.positionRepository.create({
-          systemName: args.systemName,
-          department: args.department,
-          positionDuty: args.positionDuty,
-          positionType: args.positionType || '未指定',
-          techDomain: args.techDomain || '未指定',
-          majorType: '未指定',
-          levelDistribution: '未指定',
-          urgency: args.urgency || 'medium',
-          requiredCount: args.requiredCount || 1,
-          region: args.region || '未指定',
-          deliveryForm: '未指定',
-          requirements: '待补充',
-          responsibilities: '待补充',
-          domainExperience: '待补充',
-          requirementNumber: `REQ-${Date.now()}`,
-          projectId: args.projectId,
-          creatorId: userId,
-        });
-        const result = await this.positionRepository.save(position);
-        return { id: result.id, positionDuty: result.positionDuty, message: '岗位创建成功' };
-      }
-      case 'update_position': {
-        const position = await this.positionRepository.findOne({ where: { id: args.id } });
-        if (!position) return { error: '岗位不存在' };
-        if (args.systemName !== undefined) position.systemName = args.systemName;
-        if (args.department !== undefined) position.department = args.department;
-        if (args.positionDuty !== undefined) position.positionDuty = args.positionDuty;
-        if (args.positionType !== undefined) position.positionType = args.positionType;
-        if (args.techDomain !== undefined) position.techDomain = args.techDomain;
-        if (args.urgency !== undefined) position.urgency = args.urgency;
-        if (args.requiredCount !== undefined) position.requiredCount = args.requiredCount;
-        if (args.region !== undefined) position.region = args.region;
-        if (args.status !== undefined) position.status = args.status;
-        const result = await this.positionRepository.save(position);
-        return { id: result.id, positionDuty: result.positionDuty, status: result.status, message: '岗位更新成功' };
-      }
-      case 'delete_position': {
-        const position = await this.positionRepository.findOne({ where: { id: args.id } });
-        if (!position) return { error: '岗位不存在' };
-        await this.positionRepository.remove(position);
-        return { id: args.id, message: '岗位删除成功' };
-      }
-      case 'get_position_detail': {
-        const position = await this.positionRepository.findOne({
-          where: { id: args.id },
-          relations: ['project', 'candidatePositions', 'candidatePositions.candidate'],
-        });
-        if (!position) return { error: '岗位不存在' };
-        return {
-          id: position.id,
-          systemName: position.systemName,
-          department: position.department,
-          positionDuty: position.positionDuty,
-          positionType: position.positionType,
-          techDomain: position.techDomain,
-          majorType: position.majorType,
-          levelDistribution: position.levelDistribution,
-          salaryRange: position.salaryRange,
-          requirements: position.requirements,
-          responsibilities: position.responsibilities,
-          domainExperience: position.domainExperience,
-          region: position.region,
-          deliveryForm: position.deliveryForm,
-          urgency: position.urgency,
-          requiredCount: position.requiredCount,
-          hiredCount: position.hiredCount,
-          status: position.status,
-          project: position.project ? { id: position.project.id, name: position.project.name } : null,
-          candidates: position.candidatePositions?.map(cp => ({
-            candidateId: cp.candidateId,
-            candidateName: cp.candidate?.name,
-            matchScore: cp.matchScore,
-            status: cp.status,
-          })) || [],
-        };
-      }
-      case 'import_positions_from_data': {
-        const items: any[] = args.items || [];
-        const projectId = args.projectId;
-        if (!projectId) return { error: '请指定所属项目ID' };
-        if (items.length === 0) return { error: '没有可导入的数据' };
-
-        // 字段映射表：Excel常见列名 → 系统标准字段名
-        const fieldAliases: Record<string, string> = {
-          '系统': 'systemName', '系统名称': 'systemName', '系统名': 'systemName',
-          '部门': 'department', '部门名称': 'department',
-          '需求编号': 'requirementNumber', '编号': 'requirementNumber',
-          '岗位类型': 'positionType', '职位类型': 'positionType', '类型': 'positionType',
-          '岗位职务': 'positionDuty', '岗位': 'positionDuty', '职位': 'positionDuty', '岗位名称': 'positionDuty', '职位名称': 'positionDuty', '职务': 'positionDuty',
-          '技术领域': 'techDomain', '技术方向': 'techDomain',
-          '专业类型': 'majorType', '专业': 'majorType',
-          '职级分布': 'levelDistribution', '职级': 'levelDistribution', '级别': 'levelDistribution',
-          '薪资范围': 'salaryRange', '薪资': 'salaryRange', '薪酬': 'salaryRange', '工资': 'salaryRange',
-          '岗位要求': 'requirements', '任职要求': 'requirements', '要求': 'requirements', '任职资格': 'requirements',
-          '岗位职责': 'responsibilities', '职责': 'responsibilities', '工作职责': 'responsibilities', '工作内容': 'responsibilities',
-          '领域经验': 'domainExperience', '经验要求': 'domainExperience', '经验': 'domainExperience',
-          '地区': 'region', '工作地点': 'region', '地点': 'region', '城市': 'region',
-          '交付形式': 'deliveryForm', '交付方式': 'deliveryForm',
-          '岗位实施': 'positionImplementation', '实施': 'positionImplementation',
-          '紧急程度': 'urgency', '紧急度': 'urgency', '优先级': 'urgency',
-          '需求人数': 'requiredCount', '人数': 'requiredCount', '招聘人数': 'requiredCount', 'headcount': 'requiredCount',
-          '期望到岗日期': 'expectedDate', '到岗日期': 'expectedDate', '期望日期': 'expectedDate',
-        };
-
-        // 标准字段名集合
-        const standardFields = new Set([
-          'systemName', 'department', 'requirementNumber', 'positionType', 'positionDuty',
-          'techDomain', 'majorType', 'levelDistribution', 'salaryRange', 'requirements',
-          'responsibilities', 'domainExperience', 'region', 'deliveryForm', 'positionImplementation',
-          'urgency', 'requiredCount', 'expectedDate', 'projectId', 'status',
-        ]);
-
-        let successCount = 0;
-        let updatedCount = 0;
-        const errors: string[] = [];
-
-        for (let i = 0; i < items.length; i++) {
-          try {
-            const rawItem = items[i];
-            // 智能字段映射：将Excel列名映射为系统标准字段名
-            const mappedItem: Record<string, any> = {};
-            for (const [key, value] of Object.entries(rawItem)) {
-              if (value === null || value === undefined || value === '') continue;
-              const trimmedKey = key.trim();
-              // 已经是标准字段名
-              if (standardFields.has(trimmedKey)) {
-                mappedItem[trimmedKey] = value;
-              }
-              // 通过别名映射
-              else if (fieldAliases[trimmedKey]) {
-                mappedItem[fieldAliases[trimmedKey]] = value;
-              }
-              // 尝试模糊匹配：去除空格、下划线后匹配
-              else {
-                const normalizedKey = trimmedKey.replace(/[\s_\-]/g, '').toLowerCase();
-                let matched = false;
-                for (const [alias, field] of Object.entries(fieldAliases)) {
-                  if (alias.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
-                    mappedItem[field] = value;
-                    matched = true;
-                    break;
-                  }
-                }
-                if (!matched) {
-                  // 也尝试直接匹配标准字段名（忽略大小写下划线）
-                  for (const sf of standardFields) {
-                    if (sf.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
-                      mappedItem[sf] = value;
-                      matched = true;
-                      break;
-                    }
-                  }
-                }
-                // 未匹配的字段保留原样，可能后续有用
-                if (!matched) {
-                  mappedItem[trimmedKey] = value;
-                }
-              }
-            }
-
-            // 处理紧急程度的中文映射
-            if (mappedItem.urgency) {
-              const urgencyMap: Record<string, string> = {
-                '低': 'low', '中': 'medium', '高': 'high', '紧急': 'critical',
-                '低优先': 'low', '中优先': 'medium', '高优先': 'high',
-              };
-              if (urgencyMap[mappedItem.urgency]) {
-                mappedItem.urgency = urgencyMap[mappedItem.urgency];
-              }
-            }
-
-            // 处理需求人数的类型转换
-            if (mappedItem.requiredCount && typeof mappedItem.requiredCount === 'string') {
-              const parsed = parseInt(mappedItem.requiredCount, 10);
-              if (!isNaN(parsed)) mappedItem.requiredCount = parsed;
-            }
-
-            // 检查是否已存在（按需求编号去重）
-            if (mappedItem.requirementNumber && projectId) {
-              const existing = await this.positionRepository.findOne({
-                where: { requirementNumber: mappedItem.requirementNumber, projectId },
-              });
-              if (existing) {
-                // 覆盖更新
-                Object.assign(existing, mappedItem);
-                await this.positionRepository.save(existing);
-                updatedCount++;
-                successCount++;
-                continue;
-              }
-            }
-
-            const position = this.positionRepository.create({
-              systemName: mappedItem.systemName || '未指定',
-              department: mappedItem.department || '未指定',
-              positionDuty: mappedItem.positionDuty || '未指定',
-              positionType: mappedItem.positionType || '未指定',
-              techDomain: mappedItem.techDomain || '未指定',
-              majorType: mappedItem.majorType || '未指定',
-              levelDistribution: mappedItem.levelDistribution || '未指定',
-              salaryRange: mappedItem.salaryRange || null,
-              requirements: mappedItem.requirements || '待补充',
-              responsibilities: mappedItem.responsibilities || '待补充',
-              domainExperience: mappedItem.domainExperience || '待补充',
-              region: mappedItem.region || '未指定',
-              deliveryForm: mappedItem.deliveryForm || '未指定',
-              positionImplementation: mappedItem.positionImplementation || '',
-              urgency: mappedItem.urgency || 'medium',
-              requiredCount: mappedItem.requiredCount || 1,
-              expectedDate: convertExcelDate(mappedItem.expectedDate) as any,
-              requirementNumber: mappedItem.requirementNumber || `REQ-${Date.now()}-${i}`,
-              projectId,
-              creatorId: userId,
-            });
-            await this.positionRepository.save(position);
-            successCount++;
-          } catch (err: any) {
-            errors.push(`第${i + 1}条导入失败: ${err.message || '未知错误'}`);
-          }
-        }
-        const updatedMsg = updatedCount > 0 ? `，其中 ${updatedCount} 条为覆盖更新` : '';
-        return { successCount, updatedCount, totalItems: items.length, errors, message: `成功导入${successCount}条岗位数据${updatedMsg}` };
-      }
-      // ===== Candidate tools =====
-      case 'list_candidates': {
-        const candidates = await this.candidateRepository.find({ order: { createdAt: 'DESC' } });
-        return candidates.map(c => ({
-          id: c.id, name: c.name, gender: c.gender, education: c.education,
-          domainYears: c.domainYears, workStatus: c.workStatus, expectedSalary: c.expectedSalary,
-          supplier: c.supplier, contactPhone: c.contactPhone, contactEmail: c.contactEmail,
-          educationType: c.educationType,
-        }));
-      }
-      case 'search_candidates': {
-        const qb = this.candidateRepository.createQueryBuilder('c');
-        if (args.name) qb.andWhere('c.name LIKE :name', { name: `%${args.name}%` });
-        if (args.phone) qb.andWhere('c.contact_phone LIKE :phone', { phone: `%${args.phone}%` });
-        if (args.email) qb.andWhere('c.contact_email LIKE :email', { email: `%${args.email}%` });
-        if (args.supplier) qb.andWhere('c.supplier LIKE :supplier', { supplier: `%${args.supplier}%` });
-        qb.orderBy('c.created_at', 'DESC').limit(50);
-        const candidates = await qb.getMany();
-        return candidates.map(c => ({
-          id: c.id, name: c.name, gender: c.gender, education: c.education,
-          domainYears: c.domainYears, workStatus: c.workStatus, expectedSalary: c.expectedSalary,
-          supplier: c.supplier, contactPhone: c.contactPhone, contactEmail: c.contactEmail,
-        }));
-      }
-      case 'create_candidate': {
-        const candidate = this.candidateRepository.create({
-          name: args.name,
-          gender: args.gender || '未提供',
-          contactPhone: args.phone || '',
-          contactEmail: args.email || '',
-          education: args.education || '未提供',
-          domainYears: args.domainYears ? Number(args.domainYears) : null,
-          workStatus: args.workStatus || '未提供',
-          expectedSalary: args.expectedSalary || '未提供',
-          supplier: args.supplier || '未提供',
-          idType: '身份证',
-          educationType: '统招',
-        });
-        const result = await this.candidateRepository.save(candidate);
-        return { id: result.id, name: result.name, message: '候选人添加成功' };
-      }
-      case 'update_candidate': {
-        const candidate = await this.candidateRepository.findOne({ where: { id: args.id } });
-        if (!candidate) return { error: '候选人不存在' };
-        if (args.name !== undefined) candidate.name = args.name;
-        if (args.gender !== undefined) candidate.gender = args.gender;
-        if (args.phone !== undefined) candidate.contactPhone = args.phone;
-        if (args.email !== undefined) candidate.contactEmail = args.email;
-        if (args.education !== undefined) candidate.education = args.education;
-        if (args.domainYears !== undefined) candidate.domainYears = Number(args.domainYears);
-        if (args.workStatus !== undefined) candidate.workStatus = args.workStatus;
-        if (args.expectedSalary !== undefined) candidate.expectedSalary = args.expectedSalary;
-        if (args.supplier !== undefined) candidate.supplier = args.supplier;
-        const result = await this.candidateRepository.save(candidate);
-        return { id: result.id, name: result.name, message: '候选人更新成功' };
-      }
-      case 'delete_candidate': {
-        const candidate = await this.candidateRepository.findOne({ where: { id: args.id } });
-        if (!candidate) return { error: '候选人不存在' };
-        await this.candidateRepository.remove(candidate);
-        return { id: args.id, message: '候选人删除成功' };
-      }
-      case 'get_candidate_detail': {
-        const candidate = await this.candidateRepository.findOne({
-          where: { id: args.id },
-          relations: ['candidatePositions', 'candidatePositions.position'],
-        });
-        if (!candidate) return { error: '候选人不存在' };
-        return {
-          id: candidate.id,
-          name: candidate.name,
-          gender: candidate.gender,
-          idType: candidate.idType,
-          idNumber: candidate.idNumber,
-          contactPhone: candidate.contactPhone,
-          contactEmail: candidate.contactEmail,
-          educationType: candidate.educationType,
-          education: candidate.education,
-          domainYears: candidate.domainYears,
-          workStatus: candidate.workStatus,
-          expectedSalary: candidate.expectedSalary,
-          supplier: candidate.supplier,
-          resumeText: candidate.resumeText,
-          positions: candidate.candidatePositions?.map(cp => ({
-            positionId: cp.positionId,
-            positionDuty: cp.position?.positionDuty,
-            matchScore: cp.matchScore,
-            status: cp.status,
-          })) || [],
-        };
-      }
-      case 'import_candidates_from_data': {
-        const items: any[] = args.items || [];
-        let successCount = 0;
-        const errors: string[] = [];
-
-        // 候选人字段映射表
-        const fieldAliases: Record<string, string> = {
-          '姓名': 'name', '名字': 'name', '候选人': 'name',
-          '性别': 'gender',
-          '证件类型': 'idType', '证件种类': 'idType',
-          '证件号码': 'idNumber', '身份证号': 'idNumber', '身份证': 'idNumber',
-          '联系电话': 'contactPhone', '电话': 'contactPhone', '手机': 'contactPhone', '手机号': 'contactPhone', '联系方式': 'contactPhone',
-          '联系邮箱': 'contactEmail', '邮箱': 'contactEmail', 'email': 'contactEmail', '电子邮件': 'contactEmail',
-          '区号': 'areaCode',
-          '学历类型': 'educationType', '学历性质': 'educationType',
-          '学历': 'education', '最高学历': 'education', '学位': 'education',
-          '领域年限': 'domainYears', '工作年限': 'domainYears', '经验年限': 'domainYears', '年限': 'domainYears',
-          '工作状态': 'workStatus', '在职状态': 'workStatus', '状态': 'workStatus',
-          '期望薪资': 'expectedSalary', '薪资': 'expectedSalary', '期望工资': 'expectedSalary',
-          '供应商': 'supplier', '推荐公司': 'supplier', '公司': 'supplier',
-          '推荐人': 'recommender', '推荐者': 'recommender',
-          '推荐理由': 'recommendReason', '推荐原因': 'recommendReason',
-        };
-
-        const standardFields = new Set([
-          'name', 'gender', 'idType', 'idNumber', 'contactPhone', 'contactEmail',
-          'areaCode', 'educationType', 'education', 'domainYears', 'workStatus',
-          'expectedSalary', 'supplier', 'recommender', 'recommendReason',
-        ]);
-
-        for (let i = 0; i < items.length; i++) {
-          try {
-            const rawItem = items[i];
-            // 智能字段映射
-            const mappedItem: Record<string, any> = {};
-            for (const [key, value] of Object.entries(rawItem)) {
-              if (value === null || value === undefined || value === '') continue;
-              const trimmedKey = key.trim();
-              if (standardFields.has(trimmedKey)) {
-                mappedItem[trimmedKey] = value;
-              } else if (fieldAliases[trimmedKey]) {
-                mappedItem[fieldAliases[trimmedKey]] = value;
-              } else {
-                const normalizedKey = trimmedKey.replace(/[\s_\-]/g, '').toLowerCase();
-                let matched = false;
-                for (const [alias, field] of Object.entries(fieldAliases)) {
-                  if (alias.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
-                    mappedItem[field] = value;
-                    matched = true;
-                    break;
-                  }
-                }
-                if (!matched) {
-                  for (const sf of standardFields) {
-                    if (sf.replace(/[\s_\-]/g, '').toLowerCase() === normalizedKey) {
-                      mappedItem[sf] = value;
-                      matched = true;
-                      break;
-                    }
-                  }
-                }
-                if (!matched) {
-                  mappedItem[trimmedKey] = value;
-                }
-              }
-            }
-
-            const candidate = this.candidateRepository.create({
-              name: mappedItem.name || '未命名',
-              gender: mappedItem.gender || '未提供',
-              idType: mappedItem.idType || '身份证',
-              idNumber: mappedItem.idNumber || '',
-              contactPhone: mappedItem.contactPhone || '',
-              contactEmail: mappedItem.contactEmail || '',
-              educationType: mappedItem.educationType || '统招',
-              education: mappedItem.education || '未提供',
-              domainYears: mappedItem.domainYears ? Number(mappedItem.domainYears) : null,
-              workStatus: mappedItem.workStatus || '未提供',
-              expectedSalary: mappedItem.expectedSalary || '未提供',
-              supplier: mappedItem.supplier || '未提供',
-              graduationDate: convertExcelDate(mappedItem.graduationDate) as any,
-            });
-            await this.candidateRepository.save(candidate);
-            successCount++;
-          } catch (err: any) {
-            errors.push(`第${i + 1}条导入失败: ${err.message || '未知错误'}`);
-          }
-        }
-        return { successCount, totalItems: items.length, errors, message: `成功导入${successCount}条候选人数据` };
-      }
-      // ===== Assignment/Matching tools =====
-      case 'assign_candidate_to_position': {
-        const existing = await this.candidatePositionRepository.findOne({
-          where: { candidateId: args.candidateId, positionId: args.positionId },
-        });
-        if (existing) return { error: '该候选人已分配到此岗位' };
-        const cp = this.candidatePositionRepository.create({
-          candidateId: args.candidateId,
-          positionId: args.positionId,
-          matchScore: 0,
-          status: 'pending_screen',
-          recommendedAt: new Date(),
-        });
-        const result = await this.candidatePositionRepository.save(cp);
-        return { id: result.id, candidateId: args.candidateId, positionId: args.positionId, message: '候选人已分配到岗位' };
-      }
-      case 'list_position_candidates': {
-        const cps = await this.candidatePositionRepository.find({
-          where: { positionId: args.positionId },
-          relations: ['candidate'],
-        });
-        return cps.map(cp => ({
-          id: cp.id,
-          candidateId: cp.candidateId,
-          candidateName: cp.candidate?.name,
-          matchScore: cp.matchScore,
-          status: cp.status,
-          recommendReason: cp.recommendReason,
-        }));
-      }
-      case 'update_candidate_status': {
-        const validStatuses = ['pending_screen', 'screen_rejected', 'screen_passed', 'pending_interview', 'interview_passed', 'interview_rejected', 'abandoned', 'pending_onboard', 'onboarded'];
-        if (!validStatuses.includes(args.status)) {
-          return { error: `无效的状态值，可选值：${validStatuses.join(', ')}` };
-        }
-        const candidateIds: number[] = args.candidateIds;
-        const results: { candidateId: number; success: boolean; message: string }[] = [];
-        for (const cid of candidateIds) {
-          const cp = await this.candidatePositionRepository.findOne({
-            where: { candidateId: cid, positionId: args.positionId },
-            relations: ['candidate'],
-          });
-          if (!cp) {
-            results.push({ candidateId: cid, success: false, message: '未找到该候选人在此岗位的记录' });
-            continue;
-          }
-          const oldStatus = cp.status;
-          cp.status = args.status;
-          await this.candidatePositionRepository.save(cp);
-          results.push({
-            candidateId: cid,
-            success: true,
-            message: `${cp.candidate?.name || '候选人'}：${oldStatus} → ${args.status}`,
-          });
-        }
-        return { updated: results.filter(r => r.success).length, failed: results.filter(r => !r.success).length, details: results };
-      }
-      case 'match_candidate': {
-        const candidate = await this.candidateRepository.findOne({ where: { id: args.candidateId } });
-        const position = await this.positionRepository.findOne({ where: { id: args.positionId } });
-        if (!candidate) return { error: '候选人不存在' };
-        if (!position) return { error: '岗位不存在' };
-        return this.matchCandidate(candidate, position, userId);
-      }
-      // ===== Interview tools =====
-      case 'list_interviews': {
-        const interviews = await this.interviewRepository.find({
-          relations: ['candidatePosition', 'candidatePosition.candidate', 'candidatePosition.position', 'interviewer'],
-          order: { createdAt: 'DESC' },
-        });
-        return interviews.map(i => ({
-          id: i.id,
-          candidatePositionId: i.candidatePositionId,
-          candidateName: (i.candidatePosition as any)?.candidate?.name || '未知',
-          positionDuty: (i.candidatePosition as any)?.position?.positionDuty || '未知',
-          round: i.round,
-          interviewerName: i.interviewer?.username || '未知',
-          scheduledAt: i.scheduledAt,
-          result: i.result,
-          score: i.score,
-        }));
-      }
-      case 'schedule_interview': {
-        // 1. 根据姓名/电话查找候选人
-        const candidateQb = this.candidateRepository.createQueryBuilder('c');
-        candidateQb.where('c.name = :name', { name: args.candidateName });
-        if (args.candidatePhone) {
-          candidateQb.orWhere('c.contactPhone = :phone', { phone: args.candidatePhone });
-        }
-        const matchedCandidates = await candidateQb.getMany();
-
-        if (matchedCandidates.length === 0) {
-          return { error: `未找到候选人"${args.candidateName}"，请确认姓名是否正确，或先添加该候选人` };
-        }
-
-        // 2. 查找候选人的岗位关联
-        const candidateIds = matchedCandidates.map(c => c.id);
-        const cpQb = this.candidatePositionRepository.createQueryBuilder('cp')
-          .leftJoinAndSelect('cp.candidate', 'candidate')
-          .leftJoinAndSelect('cp.position', 'position')
-          .leftJoinAndSelect('position.project', 'project')
-          .where('cp.candidateId IN (:...candidateIds)', { candidateIds });
-
-        if (args.positionName) {
-          cpQb.andWhere('position.positionDuty LIKE :posName', { posName: `%${args.positionName}%` });
-        }
-        if (args.projectName) {
-          cpQb.andWhere('project.name LIKE :projName', { projName: `%${args.projectName}%` });
-        }
-
-        const candidatePositions = await cpQb.getMany();
-
-        if (candidatePositions.length === 0) {
-          // 没有匹配的岗位关联，返回候选人的所有岗位供AI询问
-          const allCps = await this.candidatePositionRepository.find({
-            where: candidateIds.map(id => ({ candidateId: id })),
-            relations: ['candidate', 'position', 'position.project'],
-          });
-
-          if (allCps.length === 0) {
-            return { error: `候选人"${args.candidateName}"尚未分配到任何岗位，请先将候选人分配到岗位后再安排面试` };
-          }
-
-          if (allCps.length === 1) {
-            // 只有一个岗位关联，直接使用
-            const cp = allCps[0];
-            const interview = this.interviewRepository.create({
-              candidatePositionId: cp.id,
-              round: args.round || 1,
-              interviewerId: userId,
-              interviewType: args.interviewType || 'online',
-              scheduledAt: new Date(args.interviewDate),
-              meetingLink: args.meetingLink || null,
-              result: 'pending',
-            });
-            const result = await this.interviewRepository.save(interview);
-
-            // 同步候选人状态
-            if (cp.status !== 'pending_interview') {
-              cp.status = 'pending_interview';
-              await this.candidatePositionRepository.save(cp);
-            }
-
-            return {
-              id: result.id,
-              candidateName: (cp as any).candidate?.name || args.candidateName,
-              positionDuty: (cp as any).position?.positionDuty || '未知',
-              projectName: (cp as any).position?.project?.name || '未知',
-              interviewType: args.interviewType,
-              scheduledAt: result.scheduledAt,
-              round: result.round,
-              message: '面试安排成功',
-            };
-          }
-
-          // 多个岗位关联，返回列表让AI询问
-          const cpList = allCps.map(cp => ({
-            cpId: cp.id,
-            candidateName: (cp as any).candidate?.name,
-            positionDuty: (cp as any).position?.positionDuty,
-            projectName: (cp as any).position?.project?.name,
-          }));
-          return {
-            error: `候选人"${args.candidateName}"关联了多个岗位，请指定项目和岗位`,
-            availablePositions: cpList,
-          };
-        }
-
-        if (candidatePositions.length === 1) {
-          // 精确匹配到一个岗位关联
-          const cp = candidatePositions[0];
-          const interview = this.interviewRepository.create({
-            candidatePositionId: cp.id,
-            round: args.round || 1,
-            interviewerId: userId,
-            interviewType: args.interviewType || 'online',
-            scheduledAt: new Date(args.interviewDate),
-            meetingLink: args.meetingLink || null,
-            result: 'pending',
-          });
-          const result = await this.interviewRepository.save(interview);
-
-          // 同步候选人状态
-          if (cp.status !== 'pending_interview') {
-            cp.status = 'pending_interview';
-            await this.candidatePositionRepository.save(cp);
-          }
-
-          return {
-            id: result.id,
-            candidateName: (cp as any).candidate?.name || args.candidateName,
-            positionDuty: (cp as any).position?.positionDuty || '未知',
-            projectName: (cp as any).position?.project?.name || '未知',
-            interviewType: args.interviewType,
-            scheduledAt: result.scheduledAt,
-            round: result.round,
-            message: '面试安排成功',
-          };
-        }
-
-        // 匹配到多个岗位关联，返回列表让AI进一步筛选
-        const cpList = candidatePositions.map(cp => ({
-          cpId: cp.id,
-          candidateName: (cp as any).candidate?.name,
-          positionDuty: (cp as any).position?.positionDuty,
-          projectName: (cp as any).position?.project?.name,
-        }));
-        return {
-          error: `匹配到多个岗位关联，请进一步指定项目和岗位`,
-          availablePositions: cpList,
-        };
-      }
-      case 'create_interview': {
-        // First find or create the candidate_position record
-        let cp = await this.candidatePositionRepository.findOne({
-          where: { candidateId: args.candidateId, positionId: args.positionId },
-        });
-        if (!cp) {
-          cp = this.candidatePositionRepository.create({
-            candidateId: args.candidateId,
-            positionId: args.positionId,
-            matchScore: 0,
-            status: 'pending_interview',
-            recommendedAt: new Date(),
-          });
-          cp = await this.candidatePositionRepository.save(cp);
-        }
-        const interview = this.interviewRepository.create({
-          candidatePositionId: cp.id,
-          round: args.round || 1,
-          interviewerId: args.interviewerId || userId,
-          interviewType: args.interviewType || 'online',
-          scheduledAt: new Date(args.interviewDate),
-          meetingLink: args.meetingLink || null,
-          result: 'pending',
-        });
-        const result = await this.interviewRepository.save(interview);
-
-        // 同步候选人状态
-        if (cp.status !== 'pending_interview') {
-          cp.status = 'pending_interview';
-          await this.candidatePositionRepository.save(cp);
-        }
-
-        return { id: result.id, candidateId: args.candidateId, positionId: args.positionId, scheduledAt: result.scheduledAt, round: result.round, interviewType: args.interviewType, message: '面试安排创建成功' };
-      }
-      // ===== Export tools =====
-      case 'export_positions_csv': {
-        const where: any = {};
-        if (args.projectId) where.projectId = args.projectId;
-        const positions = await this.positionRepository.find({ where });
-        const headers = 'ID,系统,部门,岗位职务,岗位类型,技术领域,紧急程度,状态,需求人数,已录用人数,地区';
-        const rows = positions.map(p =>
-          `${p.id},${p.systemName},${p.department},${p.positionDuty},${p.positionType},${p.techDomain},${p.urgency},${p.status},${p.requiredCount},${p.hiredCount},${p.region}`
-        );
-        const csv = [headers, ...rows].join('\n');
-        return { csv, count: positions.length, message: `已生成${positions.length}条岗位CSV数据` };
-      }
-      case 'export_candidates_csv': {
-        let candidates: Candidate[];
-        let statusMap: Record<number, string> = {};
-        if (args.positionId) {
-          const cps = await this.candidatePositionRepository.find({
-            where: { positionId: args.positionId },
-            relations: ['candidate'],
-          });
-          candidates = cps.map(cp => cp.candidate).filter(Boolean);
-          for (const cp of cps) {
-            if (cp.candidateId) statusMap[cp.candidateId] = cp.status;
-          }
-        } else if (args.projectId) {
-          const positions = await this.positionRepository.find({
-            where: { projectId: args.projectId },
-          });
-          const positionIds = positions.map(p => p.id);
-          const cps = await this.candidatePositionRepository.find({
-            where: positionIds.map(pid => ({ positionId: pid })),
-            relations: ['candidate'],
-          });
-          candidates = cps.map(cp => cp.candidate).filter(Boolean);
-          for (const cp of cps) {
-            if (cp.candidateId) statusMap[cp.candidateId] = cp.status;
-          }
-        } else {
-          candidates = await this.candidateRepository.find();
-        }
-        const headers = 'ID,姓名,性别,学历,领域年限,工作状态,期望薪资,供应商,联系电话,邮箱,简历链接,状态';
-        const rows = candidates.map(c =>
-          `${c.id},${c.name},${c.gender || ''},${c.education || ''},${c.domainYears || ''},${c.workStatus || ''},${c.expectedSalary || ''},${c.supplier || ''},${c.contactPhone || ''},${c.contactEmail || ''},${c.resumeUrl || ''},${statusMap[c.id] || ''}`
-        );
-        const csv = [headers, ...rows].join('\n');
-        return { csv, count: candidates.length, message: `已生成${candidates.length}条候选人CSV数据` };
-      }
-      case 'upload_candidate_resume': {
-        const resumes: { candidateName: string; resumeUrl: string; positionId?: number }[] = args.resumes || [];
-        const results: { candidateName: string; success: boolean; message: string }[] = [];
-
-        for (const resume of resumes) {
-          try {
-            if (!resume.resumeUrl) {
-              results.push({ candidateName: resume.candidateName, success: false, message: '缺少简历文件路径' });
-              continue;
-            }
-
-            // 按姓名搜索候选人
-            const candidates = await this.candidateRepository
-              .createQueryBuilder('c')
-              .where('c.name LIKE :name', { name: `%${resume.candidateName}%` })
-              .getMany();
-
-            if (candidates.length === 0) {
-              results.push({ candidateName: resume.candidateName, success: false, message: '未找到匹配的候选人' });
-              continue;
-            }
-
-            // 取第一个匹配的候选人
-            const candidate = candidates[0];
-            const oldResumeUrl = candidate.resumeUrl;
-
-            // 更新候选人简历链接（使用已保存的文件路径）
-            candidate.resumeUrl = resume.resumeUrl;
-            await this.candidateRepository.save(candidate);
-
-            // 同时更新该候选人在所有岗位关联中的简历链接
-            const cps = await this.candidatePositionRepository.find({
-              where: { candidateId: candidate.id },
-            });
-            for (const cp of cps) {
-              cp.resumeUrl = resume.resumeUrl;
-              await this.candidatePositionRepository.save(cp);
-            }
-
-            results.push({
-              candidateName: resume.candidateName,
-              success: true,
-              message: `已为候选人「${candidate.name}」上传简历${oldResumeUrl ? '（覆盖旧简历）' : ''}，简历路径: ${resume.resumeUrl}`
-            });
-          } catch (err: any) {
-            results.push({ candidateName: resume.candidateName, success: false, message: err.message || '上传失败' });
-          }
-        }
-
-        const successCount = results.filter(r => r.success).length;
-        return {
-          total: resumes.length,
-          success: successCount,
-          failed: results.length - successCount,
-          details: results,
-          message: `简历上传完成：成功${successCount}个，失败${results.length - successCount}个`
-        };
-      }
-      case 'schedule_interview': {
-        const cpId = args.candidatePositionId;
-        if (!cpId) return { error: '请指定候选人-岗位关联ID' };
-
-        const cp = await this.candidatePositionRepository.findOne({
-          where: { id: cpId },
-          relations: ['candidate', 'position'],
-        });
-        if (!cp) return { error: '未找到该候选人-岗位关联记录' };
-
-        const interview = this.interviewRepository.create({
-          candidatePositionId: cpId,
-          interviewType: args.interviewType || 'online',
-          scheduledAt: args.scheduledAt ? new Date(args.scheduledAt) : new Date(),
-          meetingLink: args.meetingLink || '',
-          round: args.round || 1,
-          result: 'pending',
-        });
-        await this.interviewRepository.save(interview);
-
-        // 同步候选人状态为待面试
-        if (cp.status !== 'pending_interview') {
-          cp.status = 'pending_interview';
-          await this.candidatePositionRepository.save(cp);
-        }
-
-        // 通知候选人上传者
-        if (cp.recommenderId) {
-          try {
-            const { NoticeService } = require('../notice/notice.service');
-            // 通过注入的方式获取NoticeService
-          } catch {}
-        }
-
-        const typeLabels: Record<string, string> = { online: '线上', onsite: '现场', phone: '电话', video: '视频' };
-        return {
-          success: true,
-          interviewId: interview.id,
-          candidateName: cp.candidate?.name,
-          positionDuty: cp.position?.positionDuty,
-          interviewType: typeLabels[args.interviewType] || args.interviewType,
-          scheduledAt: interview.scheduledAt,
-          meetingLink: interview.meetingLink,
-          message: `已为候选人「${cp.candidate?.name || '未知'}」安排${typeLabels[args.interviewType] || ''}面试，岗位：${cp.position?.positionDuty || '未知'}，时间：${interview.scheduledAt.toLocaleString('zh-CN')}`
-        };
-      }
-      // ===== Dashboard/Stats tools =====
-      case 'get_dashboard_stats': {
-        const totalProjects = await this.projectRepository.count();
-        const totalPositions = await this.positionRepository.count();
-        const totalCandidates = await this.candidateRepository.count();
-        const openPositions = await this.positionRepository.count({ where: { status: 'open' } });
-        const filledPositions = await this.positionRepository.count({ where: { status: 'filled' } });
-        const partialPositions = await this.positionRepository.count({ where: { status: 'partial' } });
-        const closedPositions = await this.positionRepository.count({ where: { status: 'closed' } });
-
-        // Count candidates by work status
-        const allCandidates = await this.candidateRepository.find();
-        const candidatesByWorkStatus: Record<string, number> = {};
-        for (const c of allCandidates) {
-          const ws = c.workStatus || '未知';
-          candidatesByWorkStatus[ws] = (candidatesByWorkStatus[ws] || 0) + 1;
-        }
-
-        // Count positions by urgency
-        const urgentPositions = await this.positionRepository.count({ where: { urgency: 'critical' } });
-        const highUrgencyPositions = await this.positionRepository.count({ where: { urgency: 'high' } });
-
-        // Total assignments
-        const totalAssignments = await this.candidatePositionRepository.count();
-
-        return {
-          totalProjects,
-          totalPositions,
-          totalCandidates,
-          openPositions,
-          filledPositions,
-          partialPositions,
-          closedPositions,
-          urgentPositions,
-          highUrgencyPositions,
-          totalAssignments,
-          candidatesByWorkStatus,
-        };
-      }
-      // ===== AI tools =====
-      case 'analyze_risk': {
-        return this.analyzeRisk({}, userId);
-      }
-      case 'generate_report': {
-        const params: any = {};
-        if (args.type === 'position') params.positionId = args.positionId;
-        if (args.type === 'project') params.projectId = args.projectId;
-        return this.generateReport(args.type, params, userId);
-      }
-      default:
-        return { error: `未知函数: ${functionName}` };
-    }
   }
 
   async importFile(fileContent: string, fileType: string, userId: number) {

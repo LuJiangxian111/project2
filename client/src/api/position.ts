@@ -83,6 +83,9 @@ export const batchDeletePositions = (ids: number[]) =>
 export const getDashboardStats = (projectId?: number) =>
   request.get('/positions/dashboard/stats', { params: { projectId } });
 
+export const getUploadStats = (params?: { projectId?: number; startDate?: string; endDate?: string }) =>
+  request.get('/positions/dashboard/upload-stats', { params });
+
 // ========== 简历库 API ==========
 
 export const getResumeLibrary = (positionId: number) =>

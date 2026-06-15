@@ -110,6 +110,19 @@ export class PositionController {
     return this.positionService.getDashboardStats(projectId ? parseInt(projectId) : undefined);
   }
 
+  @Get('dashboard/upload-stats')
+  async getUploadStats(
+    @Query('projectId') projectId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.positionService.getUploadStats({
+      projectId: projectId ? parseInt(projectId) : undefined,
+      startDate,
+      endDate,
+    });
+  }
+
   // ========== 简历库端点（必须在 :id 路由之前） ==========
 
   @Get(':id/resume-library')

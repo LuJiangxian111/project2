@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Card, Descriptions, Table, Button, Spin, Tag, Divider } from 'antd';
+import { Card, Descriptions, Table, Button, Spin, Tag, Divider, Space } from 'antd';
 import { ArrowLeftOutlined } from '@ant-design/icons';
 import { getCandidate } from '../api/candidate';
 import { getInterviews } from '../api/interview';
 import { getPositions } from '../api/position';
 import MatchScoreTag from '../components/MatchScoreTag';
 import StatusTag from '../components/StatusTag';
+import ShareToDiscussion from '../components/ShareToDiscussion';
 
 export default function CandidateDetail() {
   const { id } = useParams<{ id: string }>();
@@ -48,7 +49,25 @@ export default function CandidateDetail() {
         返回
       </Button>
 
-      <Card title="基本信息" style={{ borderRadius: 8, marginBottom: 16 }}>
+      <Card title="基本信息" style={{ borderRadius: 8, marginBottom: 16 }}
+        extra={
+          <ShareToDiscussion
+            referenceType="candidate"
+            referenceId={Number(id)}
+            referenceData={{
+              id: Number(id),
+              name: candidate.name,
+              contactPhone: candidate.phone || candidate.contactPhone,
+              email: candidate.email || candidate.contactEmail,
+              status: candidate.candidatePositions?.[0]?.status,
+              positionName: candidate.candidatePositions?.[0]?.position?.positionDuty,
+              projectId: candidate.candidatePositions?.[0]?.position?.projectId || candidate.candidatePositions?.[0]?.position?.project?.id,
+              positionId: candidate.candidatePositions?.[0]?.position?.id,
+            }}
+            label={candidate.name || `候选人#${id}`}
+          />
+        }
+      >
         <Descriptions column={{ xs: 1, sm: 2, md: 3 }}>
           <Descriptions.Item label="姓名">{candidate.name}</Descriptions.Item>
           <Descriptions.Item label="手机">{candidate.phone || '-'}</Descriptions.Item>

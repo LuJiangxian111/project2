@@ -12,6 +12,7 @@ export default function InterviewList() {
   const [interviews, setInterviews] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
+  const [filterPositionId, setFilterPositionId] = useState<number | undefined>();
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [feedbackModalOpen, setFeedbackModalOpen] = useState(false);
   const [currentInterview, setCurrentInterview] = useState<any>(null);
@@ -31,7 +32,7 @@ export default function InterviewList() {
   const loadData = async () => {
     try {
       setLoading(true);
-      const res: any = await getInterviews({ result: filterStatus });
+      const res: any = await getInterviews({ result: filterStatus, positionId: filterPositionId });
       setInterviews(res.data || res || []);
     } catch (err) {
       console.error(err);
@@ -39,6 +40,10 @@ export default function InterviewList() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    loadData();
+  }, [filterStatus, filterPositionId]);
 
   const handleCreate = async () => {
     try {
@@ -87,9 +92,22 @@ export default function InterviewList() {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
         <Space>
           <Select
+            placeholder="筛选岗位"
+            value={filterPositionId}
+            onChange={(v) => setFilterPositionId(v)}
+            allowClear
+            showSearch
+            optionFilterProp="children"
+            style={{ width: 180 }}
+          >
+            {positions.map((p: any) => (
+              <Select.Option key={p.id} value={p.id}>{p.positionDuty || p.title || `岗位#${p.id}`}</Select.Option>
+            ))}
+          </Select>
+          <Select
             placeholder="筛选状态"
             value={filterStatus}
-            onChange={(v) => { setFilterStatus(v); loadData(); }}
+            onChange={(v) => setFilterStatus(v)}
             allowClear
             style={{ width: 140 }}
           >

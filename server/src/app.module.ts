@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
 import { ProjectModule } from './modules/project/project.module';
@@ -22,16 +23,19 @@ import { Notice } from './entities/notice.entity';
 import { MessageBoard } from './entities/message-board.entity';
 import { DiscussionGroup } from './entities/discussion-group.entity';
 import { DiscussionMessage } from './entities/discussion-message.entity';
+import { SystemConfig } from './entities/system-config.entity';
 import { ApiKeyModule } from './modules/api-key/api-key.module';
 import { NoticeModule } from './modules/notice/notice.module';
 import { MessageBoardModule } from './modules/message-board/message-board.module';
 import { DiscussionModule } from './modules/discussion/discussion.module';
+import { SystemConfigModule } from './modules/system-config/system-config.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+    ScheduleModule.forRoot(),
     TypeOrmModule.forRoot({
       type: process.env.DB_TYPE === 'mysql' ? 'mysql' : 'sqlite',
       host: process.env.DB_TYPE === 'mysql' ? process.env.DB_HOST : undefined,
@@ -52,6 +56,7 @@ import { DiscussionModule } from './modules/discussion/discussion.module';
         MessageBoard,
         DiscussionGroup,
         DiscussionMessage,
+        SystemConfig,
       ],
       synchronize: true,
       logging: process.env.NODE_ENV !== 'production',
@@ -69,6 +74,7 @@ import { DiscussionModule } from './modules/discussion/discussion.module';
     NoticeModule,
     MessageBoardModule,
     DiscussionModule,
+    SystemConfigModule,
   ],
 })
 export class AppModule {}

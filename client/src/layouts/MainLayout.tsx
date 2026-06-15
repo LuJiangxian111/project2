@@ -21,6 +21,8 @@ import {
 } from '@ant-design/icons';
 import { useUserStore } from '../stores/user';
 import { getNotices, createNotice, deleteNotice } from '../api/notice';
+import { on, off } from '../socket';
+import { playMessageSound, isSoundEnabled } from '../utils/notification-sound';
 import ErrorBoundary from '../components/ErrorBoundary';
 
 const { Header, Sider, Content } = Layout;
@@ -28,7 +30,7 @@ const { Header, Sider, Content } = Layout;
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: '仪表盘' },
   { key: '/projects', icon: <ProjectOutlined />, label: '项目管理' },
-  { key: '/market', icon: <ShopOutlined />, label: '需求广场' },
+  { key: '/market', icon: <ShopOutlined />, label: '岗位广场' },
   { key: '/candidates', icon: <TeamOutlined />, label: '候选人管理' },
   { key: '/interviews', icon: <CalendarOutlined />, label: '面试安排' },
   { key: '/discussions', icon: <CommentOutlined />, label: '讨论组' },
@@ -40,7 +42,7 @@ const menuItems = [
 const breadcrumbMap: Record<string, string> = {
   '/': '仪表盘',
   '/projects': '项目管理',
-  '/market': '需求广场',
+  '/market': '岗位广场',
   '/candidates': '候选人管理',
   '/interviews': '面试安排',
   '/ai': 'AI助手',
@@ -102,6 +104,19 @@ export default function MainLayout() {
       const timer = setInterval(loadNotices, 30000); // 每30秒轮询
       return () => clearInterval(timer);
     }
+  }, [user?.id]);
+
+  // 全局讨论组消息提示音
+  useEffect(() => {
+    const handler = (data: { groupId: number; message: any }) => {
+      // 不播放自己发送的消息
+      if (data.message?.senderId === user?.id) return;
+      if (isSoundEnabled()) {
+        playMessageSound();
+      }
+    };
+    on('discussion.message', handler);
+    return () => off('discussion.message', handler);
   }, [user?.id]);
 
   const handleNoticeOpenChange = (open: boolean) => {
@@ -243,20 +258,18 @@ export default function MainLayout() {
             borderBottom: `1px solid ${themeToken.colorBorderSecondary}`,
           }}
         >
-          <RobotOutlined style={{ fontSize: 24, color: themeToken.colorPrimary }} />
-          {!collapsed && (
-            <span
-              style={{
-                marginLeft: 10,
-                fontSize: 16,
-                fontWeight: 600,
-                color: themeToken.colorPrimary,
-                whiteSpace: 'nowrap',
-              }}
-            >
-              岗位需求广场
-            </span>
-          )}
+          <span style={{
+            fontSize: 32,
+            fontFamily: '"Zhi Mang Xing", "Liu Jian Mao Cao", cursive',
+            fontWeight: 400,
+            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+            WebkitBackgroundClip: 'text',
+            WebkitTextFillColor: 'transparent',
+            letterSpacing: 6,
+          }}>
+            汇流
+          </span>
+          {!collapsed && null}
         </div>
         <Menu
           mode="inline"

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Card, Descriptions, Table, Button, Space, Spin, message, Modal, Upload, Steps, Input, Tag, Checkbox, Form, Select, Row, Col, Divider, Popconfirm, Tabs } from 'antd';
 import { ArrowLeftOutlined, RobotOutlined, PlusOutlined, ImportOutlined, UploadOutlined, SearchOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, DownloadOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { getPosition, getPositionCandidates, addCandidateToPosition, batchImportCandidates, updatePosition, getResumeLibrary, uploadResumeFile, smartUploadResume, exportResumes } from '../api/position';
@@ -9,6 +9,7 @@ import { getProjects } from '../api/project';
 import StatusTag from '../components/StatusTag';
 import MatchScoreTag from '../components/MatchScoreTag';
 import CandidateModal from '../components/CandidateModal';
+import ShareToDiscussion from '../components/ShareToDiscussion';
 import { useUserStore } from '../stores/user';
 import request from '../api/request';
 
@@ -29,6 +30,8 @@ const FIELD_LABELS: Record<string, string> = {
 export default function PositionDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const highlightCandidateId = searchParams.get('highlight');
   const user = useUserStore((s) => s.user);
   const [position, setPosition] = useState<any>(null);
   const [candidates, setCandidates] = useState<any[]>([]);
@@ -69,6 +72,10 @@ export default function PositionDetail() {
   const [resumeUploading, setResumeUploading] = useState(false);
   const [selectedResumeIds, setSelectedResumeIds] = useState<number[]>([]);
   const [resumeExporting, setResumeExporting] = useState(false);
+
+  // 匹配详情弹窗
+  const [matchDetailOpen, setMatchDetailOpen] = useState(false);
+  const [matchDetailData, setMatchDetailData] = useState<any>(null);
 
   // 查看候选人详情
   const handleViewCandidate = async (candidateId: number) => {
@@ -131,7 +138,7 @@ export default function PositionDetail() {
     }
   };
 
-  // 上传简历到简历库
+  // 上传简历到简历库（支持批量）
   const handleResumeUpload = async (file: File) => {
     try {
       setResumeUploading(true);
@@ -169,6 +176,36 @@ export default function PositionDetail() {
     }
   };
 
+  // 批量上传简历
+  const handleBatchResumeUpload = async (files: File[]) => {
+    if (files.length === 0) return;
+    setResumeUploading(true);
+    let success = 0;
+    let fail = 0;
+    for (const file of files) {
+      try {
+        const uploadRes: any = await uploadResumeFile(Number(id), file);
+        const uploadData = uploadRes.data || uploadRes;
+        if (uploadData.code === 1 || !uploadData.url) {
+          fail++;
+          continue;
+        }
+        const smartRes: any = await smartUploadResume(Number(id), {
+          fileUrl: uploadData.url,
+          fileName: uploadData.fileName || file.name,
+          extractedText: uploadData.extractedText || '',
+        });
+        success++;
+      } catch {
+        fail++;
+      }
+    }
+    setResumeUploading(false);
+    message.success(`批量上传完成：成功${success}个${fail > 0 ? `，失败${fail}个` : ''}`);
+    loadResumeLibrary();
+    loadData();
+  };
+
   // 更新候选人筛选状态
   const handleScreenStatus = async (cpId: number, status: string) => {
     try {
@@ -190,8 +227,8 @@ export default function PositionDetail() {
     try {
       setResumeExporting(true);
       const res: any = await exportResumes(Number(id), selectedResumeIds);
-      // 创建下载链接
-      const blob = new Blob([res.data || res], { type: 'application/zip' });
+      // blob响应在res.data中
+      const blob = res.data instanceof Blob ? res.data : new Blob([res.data || res], { type: 'application/zip' });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
@@ -200,7 +237,7 @@ export default function PositionDetail() {
       window.URL.revokeObjectURL(url);
       message.success('导出成功');
     } catch (err: any) {
-      message.error(err?.response?.data?.message || '导出失败');
+      message.error(err?.response?.data?.message || err?.message || '导出失败');
     } finally {
       setResumeExporting(false);
     }
@@ -217,6 +254,14 @@ export default function PositionDetail() {
   useEffect(() => {
     if (id) loadData();
   }, [id]);
+
+  // 处理URL中的highlight参数，自动跳转到简历库并高亮
+  useEffect(() => {
+    if (highlightCandidateId && id) {
+      setActiveTab('resume');
+      loadResumeLibrary();
+    }
+  }, [highlightCandidateId, id]);
 
   const loadData = async () => {
     try {
@@ -459,6 +504,23 @@ export default function PositionDetail() {
               上传简历
             </Button>
           </Upload>
+          <Upload
+            beforeUpload={(file, fileList) => {
+              // 只在第一个文件时触发批量上传
+              if (fileList.indexOf(file) === 0) {
+                handleBatchResumeUpload(fileList as unknown as File[]);
+              }
+              return false;
+            }}
+            showUploadList={false}
+            accept=".pdf,.doc,.docx"
+            multiple
+            directory={false}
+          >
+            <Button icon={<UploadOutlined />} loading={resumeUploading}>
+              批量上传
+            </Button>
+          </Upload>
           {selectedResumeIds.length > 0 && (
             <Button
               icon={<DownloadOutlined />}
@@ -481,14 +543,19 @@ export default function PositionDetail() {
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
-          {resumeList.map((item: any) => (
+          {resumeList.map((item: any) => {
+            const isHighlighted = highlightCandidateId && String(item.candidateId) === highlightCandidateId;
+            return (
             <Card
               key={item.cpId}
               size="small"
               hoverable
+              id={`resume-card-${item.candidateId}`}
               style={{
                 borderRadius: 8,
-                border: selectedResumeIds.includes(item.candidateId) ? '2px solid #1890ff' : undefined,
+                border: isHighlighted ? '3px solid #faad14' : selectedResumeIds.includes(item.candidateId) ? '2px solid #1890ff' : undefined,
+                animation: isHighlighted ? 'highlightPulse 2s ease-in-out 3' : undefined,
+                boxShadow: isHighlighted ? '0 0 12px rgba(250,173,20,0.5)' : undefined,
               }}
               onClick={() => {
                 setSelectedResumeIds(prev =>
@@ -503,6 +570,21 @@ export default function PositionDetail() {
                   <div style={{ fontWeight: 600, fontSize: 15, marginBottom: 4 }}>
                     {item.name}
                     <span style={{ marginLeft: 8 }}><StatusTag status={item.status} type="candidate" /></span>
+                    {item.matchScore > 0 && (
+                      <span style={{ marginLeft: 8, cursor: 'pointer' }} onClick={(e) => {
+                        e.stopPropagation();
+                        try {
+                          const detail = item.matchDetail ? JSON.parse(item.matchDetail) : null;
+                          setMatchDetailData({ score: item.matchScore, detail, candidateName: item.name });
+                          setMatchDetailOpen(true);
+                        } catch {
+                          setMatchDetailData({ score: item.matchScore, detail: null, candidateName: item.name });
+                          setMatchDetailOpen(true);
+                        }
+                      }}>
+                        <MatchScoreTag score={item.matchScore} />
+                      </span>
+                    )}
                   </div>
                   <div style={{ color: '#666', fontSize: 13, marginBottom: 2 }}>
                     📞 {item.contactPhone || '未提供'}
@@ -574,7 +656,8 @@ export default function PositionDetail() {
                 )}
               </div>
             </Card>
-          ))}
+          );
+          })}
         </div>
       )}
     </div>
@@ -582,6 +665,13 @@ export default function PositionDetail() {
 
   return (
     <div>
+      <style>{`
+        @keyframes highlightPulse {
+          0% { box-shadow: 0 0 0 rgba(250,173,20,0); }
+          50% { box-shadow: 0 0 20px rgba(250,173,20,0.6); }
+          100% { box-shadow: 0 0 0 rgba(250,173,20,0); }
+        }
+      `}</style>
       <Button icon={<ArrowLeftOutlined />} onClick={() => navigate(-1)} style={{ marginBottom: 16 }}>
         返回
       </Button>
@@ -591,9 +681,26 @@ export default function PositionDetail() {
           <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
             <Card
               style={{ borderRadius: 8, flex: '1 1 400px', minWidth: 300 }}
-              extra={isCreator ? (
-                <Button icon={<EditOutlined />} onClick={handleEdit}>编辑</Button>
-              ) : null}
+              extra={(
+                <Space>
+                  <ShareToDiscussion
+                    referenceType="position"
+                    referenceId={Number(id)}
+                    referenceData={{
+                      id: Number(id),
+                      systemName: position.systemName,
+                      positionDuty: position.positionDuty,
+                      projectName: position.project?.name,
+                      projectId: position.projectId || position.project?.id,
+                      status: position.status,
+                      requiredCount: position.requiredCount,
+                      workLocation: position.region,
+                    }}
+                    label={`${position.systemName ? position.systemName + ' - ' : ''}${position.positionDuty || '岗位'}`}
+                  />
+                  {isCreator && <Button icon={<EditOutlined />} onClick={handleEdit}>编辑</Button>}
+                </Space>
+              )}
             >
               <Descriptions title={position.positionDuty} column={2}>
                 <Descriptions.Item label="系统">{position.systemName || '-'}</Descriptions.Item>
@@ -657,7 +764,32 @@ export default function PositionDetail() {
                   }}>
                     添加已有候选人
                   </Button>
-                  <Button icon={<RobotOutlined />} type="primary" loading={matching} onClick={() => message.info('AI匹配分析将对所有候选人执行')}>
+                  <Button icon={<RobotOutlined />} type="primary" loading={matching} onClick={async () => {
+                    if (candidates.length === 0) {
+                      message.info('暂无候选人可匹配');
+                      return;
+                    }
+                    Modal.confirm({
+                      title: '批量AI匹配分析',
+                      content: `将对当前岗位的 ${candidates.length} 位候选人逐一进行AI匹配分析，可能需要较长时间，是否继续？`,
+                      onOk: async () => {
+                        setMatching(true);
+                        let success = 0;
+                        let fail = 0;
+                        for (const cp of candidates) {
+                          try {
+                            await matchAnalysis(cp.candidateId || cp.candidate?.id, Number(id));
+                            success++;
+                          } catch {
+                            fail++;
+                          }
+                        }
+                        setMatching(false);
+                        message.success(`匹配完成：成功${success}个${fail > 0 ? `，失败${fail}个` : ''}`);
+                        loadData();
+                      },
+                    });
+                  }}>
                     AI匹配分析
                   </Button>
                 </Space>
@@ -696,7 +828,23 @@ export default function PositionDetail() {
                     title: '匹配分数',
                     dataIndex: 'matchScore',
                     key: 'matchScore',
-                    render: (v: number) => (v !== undefined && v !== null ? <MatchScoreTag score={v} /> : '-'),
+                    render: (v: number, record: any) => {
+                      if (v === undefined || v === null) return '-';
+                      return (
+                        <a onClick={() => {
+                          try {
+                            const detail = record.matchDetail ? JSON.parse(record.matchDetail) : null;
+                            setMatchDetailData({ score: v, detail, candidateName: record.candidate?.name || record.candidateName });
+                            setMatchDetailOpen(true);
+                          } catch {
+                            setMatchDetailData({ score: v, detail: null, candidateName: record.candidate?.name || record.candidateName });
+                            setMatchDetailOpen(true);
+                          }
+                        }}>
+                          <MatchScoreTag score={v} />
+                        </a>
+                      );
+                    },
                   },
                   {
                     title: '状态',
@@ -1101,6 +1249,120 @@ export default function PositionDetail() {
             )}
           </div>
         ) : null}
+      </Modal>
+
+      {/* AI匹配详情弹窗 */}
+      <Modal
+        title={`AI匹配分析 - ${matchDetailData?.candidateName || ''}`}
+        open={matchDetailOpen}
+        onCancel={() => { setMatchDetailOpen(false); setMatchDetailData(null); }}
+        footer={null}
+        width={680}
+        destroyOnClose
+      >
+        {matchDetailData && (
+          <div>
+            <div style={{ textAlign: 'center', marginBottom: 20 }}>
+              <div style={{ fontSize: 48, fontWeight: 700, color: matchDetailData.score >= 75 ? '#52c41a' : matchDetailData.score >= 60 ? '#faad14' : '#ff4d4f' }}>
+                {matchDetailData.score}
+              </div>
+              <div style={{ color: '#666' }}>综合匹配分数</div>
+            </div>
+
+            {matchDetailData.detail && (
+              <>
+                {/* 多维度评分 */}
+                {(matchDetailData.detail.skillMatch || matchDetailData.detail.experienceMatch || matchDetailData.detail.educationMatch || matchDetailData.detail.domainMatch) && (
+                  <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+                    {matchDetailData.detail.skillMatch && (
+                      <Col span={12}>
+                        <Card size="small" title="技能匹配" style={{ borderTop: '3px solid #1890ff' }}>
+                          <div style={{ fontSize: 28, fontWeight: 600, color: '#1890ff' }}>{matchDetailData.detail.skillMatch.score}<span style={{ fontSize: 14, color: '#999' }}>/100</span></div>
+                          <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{matchDetailData.detail.skillMatch.analysis}</div>
+                          {matchDetailData.detail.skillMatch.matchedSkills?.length > 0 && (
+                            <div style={{ marginTop: 6 }}>{matchDetailData.detail.skillMatch.matchedSkills.map((s: string, i: number) => <Tag key={i} color="blue" style={{ marginBottom: 2 }}>{s}</Tag>)}</div>
+                          )}
+                          {matchDetailData.detail.skillMatch.missingSkills?.length > 0 && (
+                            <div style={{ marginTop: 4 }}>{matchDetailData.detail.skillMatch.missingSkills.map((s: string, i: number) => <Tag key={i} color="red" style={{ marginBottom: 2 }}>{s}</Tag>)}</div>
+                          )}
+                        </Card>
+                      </Col>
+                    )}
+                    {matchDetailData.detail.experienceMatch && (
+                      <Col span={12}>
+                        <Card size="small" title="经验匹配" style={{ borderTop: '3px solid #722ed1' }}>
+                          <div style={{ fontSize: 28, fontWeight: 600, color: '#722ed1' }}>{matchDetailData.detail.experienceMatch.score}<span style={{ fontSize: 14, color: '#999' }}>/100</span></div>
+                          <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{matchDetailData.detail.experienceMatch.analysis}</div>
+                          {matchDetailData.detail.experienceMatch.relevantExperience?.length > 0 && (
+                            <div style={{ marginTop: 6 }}>{matchDetailData.detail.experienceMatch.relevantExperience.map((s: string, i: number) => <Tag key={i} color="purple" style={{ marginBottom: 2 }}>{s}</Tag>)}</div>
+                          )}
+                        </Card>
+                      </Col>
+                    )}
+                    {matchDetailData.detail.educationMatch && (
+                      <Col span={12}>
+                        <Card size="small" title="学历匹配" style={{ borderTop: '3px solid #13c2c2' }}>
+                          <div style={{ fontSize: 28, fontWeight: 600, color: '#13c2c2' }}>{matchDetailData.detail.educationMatch.score}<span style={{ fontSize: 14, color: '#999' }}>/100</span></div>
+                          <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{matchDetailData.detail.educationMatch.analysis}</div>
+                        </Card>
+                      </Col>
+                    )}
+                    {matchDetailData.detail.domainMatch && (
+                      <Col span={12}>
+                        <Card size="small" title="领域匹配" style={{ borderTop: '3px solid #fa8c16' }}>
+                          <div style={{ fontSize: 28, fontWeight: 600, color: '#fa8c16' }}>{matchDetailData.detail.domainMatch.score}<span style={{ fontSize: 14, color: '#999' }}>/100</span></div>
+                          <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>{matchDetailData.detail.domainMatch.analysis}</div>
+                        </Card>
+                      </Col>
+                    )}
+                  </Row>
+                )}
+
+                {/* 综合分析 */}
+                {matchDetailData.detail.overallAnalysis && (
+                  <Card size="small" title="综合分析" style={{ marginBottom: 12 }}>
+                    <div style={{ lineHeight: 1.8 }}>{matchDetailData.detail.overallAnalysis}</div>
+                  </Card>
+                )}
+
+                {/* 优劣势 */}
+                <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
+                  {matchDetailData.detail.strengths?.length > 0 && (
+                    <Col span={12}>
+                      <Card size="small" title="优势" style={{ borderTop: '3px solid #52c41a' }}>
+                        {matchDetailData.detail.strengths.map((s: string, i: number) => (
+                          <div key={i} style={{ marginBottom: 4 }}><CheckCircleOutlined style={{ color: '#52c41a', marginRight: 6 }} />{s}</div>
+                        ))}
+                      </Card>
+                    </Col>
+                  )}
+                  {matchDetailData.detail.weaknesses?.length > 0 && (
+                    <Col span={12}>
+                      <Card size="small" title="不足" style={{ borderTop: '3px solid #ff4d4f' }}>
+                        {matchDetailData.detail.weaknesses.map((s: string, i: number) => (
+                          <div key={i} style={{ marginBottom: 4 }}><CloseCircleOutlined style={{ color: '#ff4d4f', marginRight: 6 }} />{s}</div>
+                        ))}
+                      </Card>
+                    </Col>
+                  )}
+                </Row>
+
+                {/* 建议 */}
+                {matchDetailData.detail.suggestions && (
+                  <Card size="small" title="建议">
+                    <div style={{ lineHeight: 1.8 }}>{matchDetailData.detail.suggestions}</div>
+                  </Card>
+                )}
+              </>
+            )}
+
+            {(!matchDetailData.detail || Object.keys(matchDetailData.detail).length === 0) && (
+              <div style={{ textAlign: 'center', color: '#999', padding: 20 }}>
+                暂无详细分析数据，请重新执行AI匹配
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

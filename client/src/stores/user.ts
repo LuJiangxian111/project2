@@ -65,14 +65,19 @@ export const useUserStore = create<UserState>((set, get) => ({
     if (!token) return;
     // 如果已有用户信息则跳过
     if (user && user.id) return;
+    // 记住发起请求时的 token，如果请求期间 token 变化了（用户重新登录），则不执行 logout
+    const tokenAtRequestStart = token;
     try {
       const res: any = await getProfile();
       const profile = res.data || res;
       localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(profile));
       set({ user: profile });
     } catch {
-      // token 无效则登出
-      get().logout();
+      // 仅当 token 没有变化时才 logout，避免竞态条件：用户在 loadUser 期间重新登录
+      const currentToken = get().token;
+      if (currentToken === tokenAtRequestStart) {
+        get().logout();
+      }
     }
   },
 }));

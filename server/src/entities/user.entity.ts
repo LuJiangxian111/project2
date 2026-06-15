@@ -18,6 +18,9 @@ export class User {
   @Column({ unique: true })
   username: string;
 
+  @Column({ name: 'employee_id', unique: true, nullable: true })
+  employeeId: string;
+
   @Column()
   password: string;
 
@@ -50,6 +53,9 @@ export class User {
 
   @Column({ name: 'llm_model', nullable: true })
   llmModel: string;
+
+  @Column({ name: 'use_system_llm', type: 'boolean', default: true })
+  useSystemLlm: boolean;
 
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Card, Form, Input, Button, message, Spin, Tabs, Table, Modal, Tag, Space, Popconfirm, Alert, Typography } from 'antd';
+import { Card, Form, Input, Button, message, Spin, Tabs, Table, Modal, Tag, Space, Popconfirm, Alert, Typography, Switch, Divider } from 'antd';
 import {
   PlusOutlined,
   KeyOutlined,
@@ -7,9 +7,12 @@ import {
   DeleteOutlined,
   StopOutlined,
   ApiOutlined,
+  RobotOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { useUserStore } from '../stores/user';
-import { getProfile } from '../api/auth';
+import { getProfile, updateProfile } from '../api/auth';
+import { getSystemLlmConfig, updateSystemLlmConfig } from '../api/system-config';
 import request from '../api/request';
 
 const { Paragraph, Text } = Typography;
@@ -19,6 +22,12 @@ export default function Settings() {
   const [loading, setLoading] = useState(false);
   const [aiForm] = Form.useForm();
   const [testing, setTesting] = useState(false);
+
+  // 系统AI配置相关
+  const [systemLlm, setSystemLlm] = useState({ baseUrl: '', apiKey: '', model: '', apiKeyConfigured: false });
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [systemLlmForm] = Form.useForm();
+  const [useSystemLlm, setUseSystemLlm] = useState(true);
 
   // API Key 相关
   const [apiKeys, setApiKeys] = useState<any[]>([]);
@@ -30,7 +39,17 @@ export default function Settings() {
   useEffect(() => {
     loadProfile();
     loadApiKeys();
+    loadSystemLlmConfig();
   }, []);
+
+  const loadSystemLlmConfig = async () => {
+    try {
+      const res: any = await getSystemLlmConfig();
+      const data = res.data || res;
+      setSystemLlm(data);
+      systemLlmForm.setFieldsValue({ baseUrl: data.baseUrl, model: data.model });
+    } catch { /* ignore */ }
+  };
 
   const loadProfile = async () => {
     try {
@@ -38,6 +57,7 @@ export default function Settings() {
       const res: any = await getProfile();
       const profile = res.data || res;
       setUser(profile);
+      setUseSystemLlm(profile.useSystemLlm !== false);
       aiForm.setFieldsValue({
         llmApiKey: profile.llmApiKey,
         llmBaseUrl: profile.llmBaseUrl,
@@ -181,25 +201,126 @@ export default function Settings() {
   const tabItems = [
     {
       key: 'ai',
-      label: 'AI 配置',
+      label: (
+        <Space>
+          <RobotOutlined />
+          AI 大模型配置
+        </Space>
+      ),
       children: (
-        <Spin spinning={loading}>
-          <Form form={aiForm} layout="vertical" style={{ maxWidth: 480 }}>
-            <Form.Item name="llmApiKey" label="LLM API Key" extra="API密钥将加密存储，不会明文显示">
-              <Input.Password placeholder="请输入LLM API Key" />
-            </Form.Item>
-            <Form.Item name="llmBaseUrl" label="API Base URL" extra="如：https://api.openai.com/v1">
-              <Input placeholder="请输入API Base URL" />
-            </Form.Item>
-            <Form.Item name="llmModel" label="模型名称" extra="如：gpt-4, claude-3-opus-20240229 等">
-              <Input placeholder="请输入模型名称" />
-            </Form.Item>
-            <Form.Item>
-              <Button type="primary" onClick={handleAISave} style={{ marginRight: 12 }}>保存配置</Button>
-              <Button onClick={handleTestConnection} loading={testing}>测试连接</Button>
-            </Form.Item>
-          </Form>
-        </Spin>
+        <div>
+          <Alert
+            message="选择 AI 大模型来源"
+            description="您可以使用系统内置的 AI 大模型，也可以配置自己的大模型 API。系统内置模型由管理员统一配置，所有用户共享；自定义模型则使用您自己的 API Key 和配额。"
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+
+          <div style={{ marginBottom: 24 }}>
+            <Space>
+              <Text strong>使用系统内置 AI：</Text>
+              <Switch
+                checked={useSystemLlm}
+                onChange={async (checked) => {
+                  setUseSystemLlm(checked);
+                  try {
+                    await updateProfile(user?.id!, { useSystemLlm: checked });
+                    message.success(checked ? '已切换为系统内置 AI' : '已切换为自定义 AI');
+                  } catch {
+                    message.error('切换失败');
+                  }
+                }}
+              />
+              {useSystemLlm ? (
+                <Tag color="blue">当前使用系统内置 AI</Tag>
+              ) : (
+                <Tag color="orange">当前使用自定义 AI</Tag>
+              )}
+            </Space>
+          </div>
+
+          <Tabs
+            items={[
+              {
+                key: 'system',
+                label: '系统内置 AI 配置',
+                children: (
+                  <div>
+                    <Alert
+                      message={systemLlm.apiKeyConfigured ? '系统 AI 已配置' : '系统 AI 尚未配置，请联系管理员或在此配置'}
+                      type={systemLlm.apiKeyConfigured ? 'success' : 'warning'}
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                    />
+                    <Form
+                      form={systemLlmForm}
+                      layout="vertical"
+                      onFinish={async (values) => {
+                        setLlmLoading(true);
+                        try {
+                          await updateSystemLlmConfig(values);
+                          message.success('系统 AI 配置已更新');
+                          loadSystemLlmConfig();
+                        } catch {
+                          message.error('更新失败');
+                        } finally {
+                          setLlmLoading(false);
+                        }
+                      }}
+                    >
+                      <Form.Item name="baseUrl" label="API 地址" extra="例如：https://api.openai.com/v1">
+                        <Input placeholder="例如：https://api.openai.com/v1" />
+                      </Form.Item>
+                      <Form.Item name="apiKey" label="API Key" extra="系统级 API Key，所有用户共享">
+                        <Input.Password placeholder={systemLlm.apiKeyConfigured ? '已配置，留空则不修改' : '请输入 API Key'} />
+                      </Form.Item>
+                      <Form.Item name="model" label="模型名称" extra="例如：gpt-4o-mini">
+                        <Input placeholder="例如：gpt-4o-mini" />
+                      </Form.Item>
+                      <Form.Item>
+                        <Button type="primary" htmlType="submit" loading={llmLoading} icon={<SettingOutlined />}>
+                          保存系统 AI 配置
+                        </Button>
+                      </Form.Item>
+                    </Form>
+                  </div>
+                ),
+              },
+              {
+                key: 'custom',
+                label: '自定义 AI 配置',
+                children: (
+                  <Spin spinning={loading}>
+                    <div>
+                      <Alert
+                        message="配置您自己的 AI 大模型，将使用您的 API Key 和配额"
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                      />
+                      <Form form={aiForm} layout="vertical" style={{ maxWidth: 480 }}>
+                        <Form.Item name="llmApiKey" label="LLM API Key" extra="API密钥将加密存储，不会明文显示">
+                          <Input.Password placeholder="请输入LLM API Key" />
+                        </Form.Item>
+                        <Form.Item name="llmBaseUrl" label="API Base URL" extra="如：https://api.openai.com/v1">
+                          <Input placeholder="请输入API Base URL" />
+                        </Form.Item>
+                        <Form.Item name="llmModel" label="模型名称" extra="如：gpt-4, claude-3-opus-20240229 等">
+                          <Input placeholder="请输入模型名称" />
+                        </Form.Item>
+                        <Form.Item>
+                          <Button type="primary" onClick={handleAISave} style={{ marginRight: 12 }}>保存配置</Button>
+                          <Button onClick={handleTestConnection} loading={testing}>测试连接</Button>
+                        </Form.Item>
+                      </Form>
+                    </div>
+                  </Spin>
+                ),
+              },
+            ]}
+          />
+        </div>
       ),
     },
     {

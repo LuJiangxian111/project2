@@ -296,6 +296,20 @@ export class PositionService {
     if (!position) {
       throw new NotFoundException('岗位不存在');
     }
+
+    // 先删除关联的面试安排
+    const cps = await this.candidatePositionRepository.find({ where: { positionId: id } });
+    const cpIds = cps.map(cp => cp.id);
+    if (cpIds.length > 0) {
+      // 删除面试
+      const interviewRepo = this.candidatePositionRepository.manager.getRepository(
+        require('../../entities/interview.entity').Interview,
+      );
+      await interviewRepo.delete({ candidatePositionId: In(cpIds) });
+      // 删除候选人岗位关联
+      await this.candidatePositionRepository.delete({ positionId: id });
+    }
+
     await this.positionRepository.remove(position);
     await this.logService.log(userId, 'delete', 'position', id, {
       positionDuty: position.positionDuty,
@@ -309,17 +323,8 @@ export class PositionService {
     let failed = 0;
     for (const id of ids) {
       try {
-        const position = await this.positionRepository.findOne({ where: { id } });
-        if (position) {
-          await this.positionRepository.remove(position);
-          await this.logService.log(userId, 'batch_delete', 'position', id, {
-            positionDuty: position.positionDuty,
-          });
-          this.socketGateway.broadcastToAllUsers('position.deleted', { id });
-          success++;
-        } else {
-          failed++;
-        }
+        await this.remove(id, userId);
+        success++;
       } catch {
         failed++;
       }
@@ -366,6 +371,10 @@ export class PositionService {
       .andWhere('candidate.contactPhone = :phone', { phone: candidate.contactPhone || '' })
       .getOne();
 
+    // 强制推荐人为上传者
+    const uploader = await this.userRepository.findOne({ where: { id: userId } });
+    const uploaderName = uploader?.name || uploader?.username || '';
+
     if (existingCP) {
       // 同一推荐人：覆盖更新
       if (existingCP.recommenderId === userId) {
@@ -375,7 +384,7 @@ export class PositionService {
           candidate.resumeUrl = candidateData.resumeUrl;
           await this.candidateRepository.save(candidate);
         }
-        if (candidateData.recommender) existingCP.recommender = candidateData.recommender;
+        existingCP.recommender = uploaderName;
         if (candidateData.recommendReason) existingCP.recommendReason = candidateData.recommendReason;
         existingCP.recommendedAt = new Date();
         existingCP.pushDate = new Date();
@@ -404,7 +413,7 @@ export class PositionService {
       status: 'pending_screen',
       recommendedAt: new Date(),
       pushDate: new Date(),
-      recommender: candidateData.recommender || '',
+      recommender: uploaderName,
       recommenderId: userId,
       recommendReason: candidateData.recommendReason || '',
       implementation: positionWithImpl?.positionImplementation || '',
@@ -421,7 +430,7 @@ export class PositionService {
     if (position.creatorId && position.creatorId !== userId) {
       this.noticeService.createSystemNotice(
         '新候选人推荐',
-        `${candidateData.recommender || '有人'}向您的岗位「${position.positionDuty}」推荐了候选人「${candidate.name}」`,
+        `${uploaderName || '有人'}向您的岗位「${position.positionDuty}」推荐了候选人「${candidate.name}」`,
         position.creatorId,
       ).catch(() => {});
     }
@@ -434,6 +443,22 @@ export class PositionService {
       }
     } catch (err) {
       console.error('[Position] 添加讨论组成员失败:', err?.message || err);
+    }
+
+    // AI机器人通知讨论组：新候选人推荐
+    try {
+      const mentionIds: number[] = [];
+      if (position.creatorId) mentionIds.push(position.creatorId);
+      await this.discussionService.sendBotMessageByProject(
+        position.projectId,
+        `📢 新候选人推荐：${uploaderName || '有人'}向岗位「${position.positionDuty}」推荐了候选人「${candidate.name}」`,
+        mentionIds,
+        'candidate',
+        candidate.id,
+        { id: candidate.id, name: candidate.name, positionDuty: position.positionDuty },
+      );
+    } catch (err) {
+      console.error('[Position] AI机器人通知失败:', err?.message || err);
     }
 
     return result;
@@ -515,6 +540,8 @@ export class PositionService {
       recommenderId: cp.recommenderId,
       recommender: cp.recommender || '',
       recommendedAt: cp.recommendedAt,
+      matchScore: cp.matchScore || 0,
+      matchDetail: cp.matchDetail || null,
     }));
   }
 
@@ -581,16 +608,18 @@ export class PositionService {
     if (extractedText) {
       try {
         parsedInfo = await this.aiService.parseResume(extractedText, userId);
+        console.log('[Position] AI解析简历结果:', JSON.stringify(parsedInfo));
       } catch (err) {
         console.error('[Position] AI解析简历失败:', err?.message || err);
       }
     }
 
-    const candidateName = parsedInfo.name || fileName.replace(/\.[^.]+$/, '').replace(/[_\-]/g, ' ').trim();
+    // 优先使用AI解析的姓名和电话，如果没有则从文件名提取
+    const candidateName = parsedInfo.name || '';
     const candidatePhone = parsedInfo.phone || '';
 
-    if (!candidateName) {
-      throw new BadRequestException('无法从简历中提取候选人姓名');
+    if (!candidateName && !candidatePhone) {
+      throw new BadRequestException('无法从简历中提取候选人信息，请确保简历包含姓名和联系方式');
     }
 
     // 在该岗位下查找同名同电话的候选人
@@ -614,6 +643,9 @@ export class PositionService {
         if (parsedInfo.education) existingCP.candidate.education = parsedInfo.education;
         if (parsedInfo.yearsOfExperience) existingCP.candidate.domainYears = Number(parsedInfo.yearsOfExperience) || existingCP.candidate.domainYears;
         await this.candidateRepository.save(existingCP.candidate);
+        // 强制推荐人为上传者
+        const uploaderForUpdate = await this.userRepository.findOne({ where: { id: userId } });
+        existingCP.recommender = uploaderForUpdate?.name || uploaderForUpdate?.username || '';
         existingCP.recommendedAt = new Date();
         const result = await this.candidatePositionRepository.save(existingCP);
         return {
@@ -632,21 +664,21 @@ export class PositionService {
       throw new ConflictException('该候选人已由其他用户上传');
     }
 
-    // 未找到匹配候选人，创建新候选人
+    // 未找到匹配候选人，创建新候选人（使用AI解析的完整信息）
     const candidate = this.candidateRepository.create({
-      name: candidateName,
+      name: candidateName || '未知',
       contactPhone: candidatePhone || '',
       contactEmail: parsedInfo.email || '',
+      gender: parsedInfo.gender || '未提供',
       education: parsedInfo.education || '未提供',
+      educationType: parsedInfo.educationType || '统招',
       domainYears: parsedInfo.yearsOfExperience ? Number(parsedInfo.yearsOfExperience) : null,
       supplier: parsedInfo.currentCompany || '未提供',
+      workStatus: parsedInfo.workStatus || '未提供',
+      expectedSalary: parsedInfo.expectedSalary || '未提供',
+      idType: '身份证',
       resumeUrl: fileUrl,
       resumeText: extractedText ? extractedText.substring(0, 30000) : null,
-      gender: '未提供',
-      idType: '身份证',
-      educationType: '统招',
-      workStatus: '未提供',
-      expectedSalary: '未提供',
     });
     const savedCandidate = await this.candidateRepository.save(candidate);
 
@@ -654,13 +686,17 @@ export class PositionService {
       where: { id: positionId },
     });
 
+    // 强制推荐人为上传者
+    const uploader = await this.userRepository.findOne({ where: { id: userId } });
+    const uploaderName = uploader?.name || uploader?.username || '';
+
     const cp = this.candidatePositionRepository.create({
       candidateId: savedCandidate.id,
       positionId,
       status: 'pending_screen',
       recommendedAt: new Date(),
       pushDate: new Date(),
-      recommender: '',
+      recommender: uploaderName,
       recommenderId: userId,
       recommendReason: '简历库上传',
       implementation: positionWithImpl?.positionImplementation || '',
@@ -713,7 +749,8 @@ export class PositionService {
       where: { id: positionId },
     });
     if (!position) {
-      throw new NotFoundException('岗位不存在');
+      res.status(404).json({ message: '岗位不存在' });
+      return;
     }
 
     // 查询候选人及其简历
@@ -725,17 +762,13 @@ export class PositionService {
       .getMany();
 
     if (cps.length === 0) {
-      throw new NotFoundException('没有找到有简历的候选人');
+      res.status(404).json({ message: '没有找到有简历的候选人' });
+      return;
     }
 
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', `attachment; filename=resumes_${position.positionDuty}_${Date.now()}.zip`);
-
-    const archive = (archiver as any)('zip', { zlib: { level: 5 } });
-    archive.pipe(res);
-
+    // 先检查实际存在的简历文件，避免 headers 已发送后无法修改状态码
     const uploadsDir = path.join(__dirname, '..', '..', '..', 'uploads');
-    let addedCount = 0;
+    const validFiles: { filePath: string; fileName: string }[] = [];
 
     for (const cp of cps) {
       const resumeUrl = cp.resumeUrl || cp.candidate?.resumeUrl;
@@ -745,13 +778,32 @@ export class PositionService {
       if (fs.existsSync(filePath)) {
         const ext = filePath.split('.').pop();
         const fileName = `${cp.candidate?.name || '未知'}_${cp.candidateId}.${ext}`;
-        archive.file(filePath, { name: fileName });
-        addedCount++;
+        validFiles.push({ filePath, fileName });
       }
     }
 
-    if (addedCount === 0) {
-      throw new NotFoundException('简历文件不存在');
+    if (validFiles.length === 0) {
+      res.status(404).json({ message: '简历文件不存在' });
+      return;
+    }
+
+    res.setHeader('Content-Type', 'application/zip');
+    const safeName = encodeURIComponent(position.positionDuty || 'resumes');
+    res.setHeader('Content-Disposition', `attachment; filename=resumes_${Date.now()}.zip; filename*=UTF-8''resumes_${safeName}_${Date.now()}.zip`);
+
+    const archive = (archiver as any)('zip', { zlib: { level: 5 } });
+    archive.pipe(res);
+
+    // 处理 archiver 流错误
+    archive.on('error', (err: any) => {
+      console.error('[Export] archiver error:', err.message || err);
+      if (!res.headersSent) {
+        res.status(500).json({ message: '打包简历文件失败' });
+      }
+    });
+
+    for (const { filePath, fileName } of validFiles) {
+      archive.file(filePath, { name: fileName });
     }
 
     archive.finalize();
@@ -883,6 +935,78 @@ export class PositionService {
       screeningPassRate,
       interviewPassRate,
       recentActivities: activityLog,
+    };
+  }
+
+  async getUploadStats(query?: { projectId?: number; startDate?: string; endDate?: string }) {
+    const qb = this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .leftJoin('cp.position', 'position')
+      .leftJoin('position.project', 'project')
+      .leftJoin(User, 'recommender', 'recommender.id = cp.recommenderId')
+      .select([
+        'DATE(cp.recommendedAt) as date',
+        'cp.recommenderId as recommenderId',
+        'COALESCE(MAX(recommender.name), MAX(recommender.nickname), MAX(recommender.username), MAX(cp.recommender)) as recommenderName',
+        'project.id as projectId',
+        'MAX(project.name) as projectName',
+        'position.id as positionId',
+        'MAX(position.positionDuty) as positionDuty',
+        'COUNT(cp.id) as count',
+      ])
+      .where('cp.recommendedAt IS NOT NULL');
+
+    if (query?.projectId) {
+      qb.andWhere('position.projectId = :projectId', { projectId: query.projectId });
+    }
+    if (query?.startDate) {
+      qb.andWhere('cp.recommendedAt >= :startDate', { startDate: query.startDate });
+    }
+    if (query?.endDate) {
+      qb.andWhere('cp.recommendedAt <= :endDate', { endDate: query.endDate + ' 23:59:59' });
+    }
+
+    qb.groupBy('DATE(cp.recommendedAt)')
+      .addGroupBy('cp.recommenderId')
+      .addGroupBy('project.id')
+      .addGroupBy('position.id')
+      .orderBy('date', 'DESC');
+
+    const rawStats = await qb.getRawMany();
+
+    // 汇总每人每天的总数
+    const dailySummary = await this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .leftJoin(User, 'recommender', 'recommender.id = cp.recommenderId')
+      .select([
+        'DATE(cp.recommendedAt) as date',
+        'cp.recommenderId as recommenderId',
+        'COALESCE(MAX(recommender.name), MAX(recommender.nickname), MAX(recommender.username), MAX(cp.recommender)) as recommenderName',
+        'COUNT(cp.id) as totalCount',
+      ])
+      .where('cp.recommendedAt IS NOT NULL')
+      .groupBy('DATE(cp.recommendedAt)')
+      .addGroupBy('cp.recommenderId')
+      .orderBy('date', 'DESC')
+      .getRawMany();
+
+    return {
+      details: rawStats.map(r => ({
+        date: r.date,
+        recommenderId: r.recommenderId,
+        recommenderName: r.recommenderName || '未知',
+        projectId: r.projectId,
+        projectName: r.projectName,
+        positionId: r.positionId,
+        positionDuty: r.positionDuty,
+        count: parseInt(r.count),
+      })),
+      dailySummary: dailySummary.map(r => ({
+        date: r.date,
+        recommenderId: r.recommenderId,
+        recommenderName: r.recommenderName || '未知',
+        totalCount: parseInt(r.totalCount),
+      })),
     };
   }
 }

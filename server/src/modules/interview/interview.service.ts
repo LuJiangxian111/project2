@@ -7,6 +7,7 @@ import { LogService } from '../log/log.service';
 import { AiService } from '../ai/ai.service';
 import { NoticeService } from '../notice/notice.service';
 import { SocketGateway } from '../socket/socket.gateway';
+import { DiscussionService } from '../discussion/discussion.service';
 
 @Injectable()
 export class InterviewService {
@@ -19,6 +20,7 @@ export class InterviewService {
     private aiService: AiService,
     private noticeService: NoticeService,
     private socketGateway: SocketGateway,
+    private discussionService: DiscussionService,
   ) {}
 
   async findAll(query?: {
@@ -26,6 +28,7 @@ export class InterviewService {
     result?: string;
     candidatePositionId?: number;
     projectId?: number;
+    positionId?: number;
   }) {
     const qb = this.interviewRepository
       .createQueryBuilder('interview')
@@ -50,6 +53,9 @@ export class InterviewService {
     }
     if (query?.projectId) {
       qb.andWhere('position.projectId = :projectId', { projectId: query.projectId });
+    }
+    if (query?.positionId) {
+      qb.andWhere('cp.positionId = :positionId', { positionId: query.positionId });
     }
 
     qb.orderBy('interview.scheduledAt', 'DESC');
@@ -110,6 +116,31 @@ export class InterviewService {
       round: result.round,
       candidatePositionId: result.candidatePositionId,
     });
+
+    // AI机器人通知讨论组：新面试安排
+    try {
+      const cp = await this.candidatePositionRepository.findOne({
+        where: { id: result.candidatePositionId },
+        relations: ['candidate', 'position'],
+      });
+      if (cp?.position?.projectId) {
+        const mentionIds: number[] = [];
+        if (result.interviewerId) mentionIds.push(result.interviewerId);
+        if (cp.recommenderId) mentionIds.push(cp.recommenderId);
+        const timeStr = result.scheduledAt ? new Date(result.scheduledAt).toLocaleString('zh-CN') : '待定';
+        await this.discussionService.sendBotMessageByProject(
+          cp.position.projectId,
+          `📅 面试安排：候选人「${cp.candidate?.name || '未知'}」已安排面试，岗位「${cp.position?.positionDuty || '未知'}」，时间：${timeStr}`,
+          mentionIds,
+          'interview',
+          result.id,
+          { id: result.id, candidateName: cp.candidate?.name, positionDuty: cp.position?.positionDuty, scheduledAt: result.scheduledAt },
+        );
+      }
+    } catch (err) {
+      console.error('[Interview] AI机器人通知失败:', err?.message || err);
+    }
+
     return result;
   }
 
@@ -168,6 +199,34 @@ export class InterviewService {
     }
 
     await this.logService.log(userId, 'update', 'interview', id, data);
+
+    // AI机器人通知讨论组：面试结果更新
+    if (data.result && data.result !== 'pending') {
+      try {
+        const cp = interview.candidatePosition;
+        if (cp?.position?.projectId) {
+          const statusLabel: Record<string, string> = {
+            interview_passed: '面试通过',
+            interview_rejected: '面试不通过',
+            abandoned: '放弃面试',
+          };
+          const mentionIds: number[] = [];
+          if (cp.recommenderId) mentionIds.push(cp.recommenderId);
+          if (interview.interviewerId) mentionIds.push(interview.interviewerId);
+          await this.discussionService.sendBotMessageByProject(
+            cp.position.projectId,
+            `📋 面试结果：候选人「${cp.candidate?.name || '未知'}」${statusLabel[data.result] || data.result}，岗位「${cp.position?.positionDuty || '未知'}」`,
+            mentionIds,
+            'interview',
+            id,
+            { id, candidateName: cp.candidate?.name, positionDuty: cp.position?.positionDuty, result: data.result },
+          );
+        }
+      } catch (err) {
+        console.error('[Interview] AI机器人通知失败:', err?.message || err);
+      }
+    }
+
     return result;
   }
 

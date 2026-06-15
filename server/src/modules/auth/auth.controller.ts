@@ -22,6 +22,7 @@ export class AuthController {
       password: string;
       name: string;
       role: string;
+      employeeId?: string;
       adminKey?: string;
     },
   ) {
@@ -31,6 +32,7 @@ export class AuthController {
       body.name,
       body.role,
       body.adminKey,
+      body.employeeId,
     );
   }
 

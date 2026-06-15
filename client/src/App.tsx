@@ -64,7 +64,7 @@ export default function App() {
         <Route path="candidates/:id" element={<CandidateDetail />} />
         <Route path="interviews" element={<InterviewSchedule />} />
         <Route path="ai" element={<AIAssistant />} />
-        <Route path="discussions" element={<DiscussionGroups />} />
+        <Route path="discussions" element={<ErrorBoundary><DiscussionGroups /></ErrorBoundary>} />
         <Route path="message-board" element={<ErrorBoundary><Suspense fallback={<div>加载中...</div>}><MessageBoard /></Suspense></ErrorBoundary>} />
         <Route path="settings" element={<Settings />} />
         <Route path="profile" element={<Profile />} />

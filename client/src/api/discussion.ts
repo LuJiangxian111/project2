@@ -17,3 +17,5 @@ export const removeMember = (groupId: number, userId: number) =>
   request.delete(`/discussion/${groupId}/members/${userId}`);
 export const getMembers = (groupId: number) =>
   request.get(`/discussion/${groupId}/members`);
+export const dissolveGroup = (groupId: number) =>
+  request.delete(`/discussion/${groupId}`);

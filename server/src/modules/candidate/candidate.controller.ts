@@ -95,32 +95,43 @@ export class CandidateController {
       return;
     }
 
+    // 先检查实际存在的简历文件数量，避免 headers 已发送后无法修改状态码
+    const uploadsDir = join(__dirname, '..', '..', '..', 'uploads');
+    const validFiles: { filePath: string; fileName: string }[] = [];
+
+    for (const candidate of candidates) {
+      const resumeUrl = candidate.resumeUrl;
+      if (!resumeUrl) continue;
+
+      const filePath = join(uploadsDir, resumeUrl.replace('/uploads/', ''));
+      if (fs.existsSync(filePath)) {
+        const ext = filePath.split('.').pop();
+        const fileName = `${candidate.name}_${candidate.id}.${ext}`;
+        validFiles.push({ filePath, fileName });
+      }
+    }
+
+    if (validFiles.length === 0) {
+      res.status(404).json({ message: '简历文件不存在' });
+      return;
+    }
+
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename=resumes_${Date.now()}.zip`);
 
     const archive = (archiver as any)('zip', { zlib: { level: 5 } });
     archive.pipe(res);
 
-    const uploadsDir = join(__dirname, '..', '..', '..', 'uploads');
-    let addedCount = 0;
-
-    for (const candidate of candidates) {
-      const resumeUrl = candidate.resumeUrl;
-      if (!resumeUrl) continue;
-
-      // resumeUrl 格式: /uploads/resumes/xxx.pdf
-      const filePath = join(uploadsDir, resumeUrl.replace('/uploads/', ''));
-      if (fs.existsSync(filePath)) {
-        const ext = filePath.split('.').pop();
-        const fileName = `${candidate.name}_${candidate.id}.${ext}`;
-        archive.file(filePath, { name: fileName });
-        addedCount++;
+    // 处理 archiver 流错误，避免未捕获异常导致 500
+    archive.on('error', (err: any) => {
+      console.error('[Export] archiver error:', err.message || err);
+      if (!res.headersSent) {
+        res.status(500).json({ message: '打包简历文件失败' });
       }
-    }
+    });
 
-    if (addedCount === 0) {
-      res.status(404).json({ message: '简历文件不存在' });
-      return;
+    for (const { filePath, fileName } of validFiles) {
+      archive.file(filePath, { name: fileName });
     }
 
     archive.finalize();

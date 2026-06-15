@@ -3,7 +3,12 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { DiscussionGroup } from '../../entities/discussion-group.entity';
 import { DiscussionMessage } from '../../entities/discussion-message.entity';
+import { User } from '../../entities/user.entity';
 import { SocketGateway } from '../socket/socket.gateway';
+
+// AI机器人用户名
+export const BOT_USERNAME = 'AI助手';
+export const BOT_USER_KEY = 'ai_bot_user_id';
 
 @Injectable()
 export class DiscussionService {
@@ -12,6 +17,8 @@ export class DiscussionService {
     private groupRepository: Repository<DiscussionGroup>,
     @InjectRepository(DiscussionMessage)
     private messageRepository: Repository<DiscussionMessage>,
+    @InjectRepository(User)
+    private userRepository: Repository<User>,
     private socketGateway: SocketGateway,
   ) {}
 
@@ -26,15 +33,31 @@ export class DiscussionService {
 
   // 获取用户所属的所有讨论组
   async findByUser(userId: number) {
-    const groups = await this.groupRepository
-      .createQueryBuilder('group')
-      .leftJoinAndSelect('group.members', 'member')
-      .leftJoinAndSelect('group.leader', 'leader')
-      .leftJoinAndSelect('group.project', 'project')
-      .where('member.id = :userId', { userId })
-      .orWhere('group.leaderId = :userId', { userId })
-      .getMany();
-    return groups;
+    // 查找用户作为成员的讨论组ID
+    const memberRows = await this.groupRepository.manager
+      .createQueryBuilder()
+      .select('dgm.group_id', 'groupId')
+      .from('discussion_group_members', 'dgm')
+      .where('dgm.user_id = :userId', { userId })
+      .getRawMany();
+
+    const groupIds: number[] = memberRows.map(r => Number(r.groupId));
+
+    // 再加上用户作为leader的讨论组
+    const leaderGroups = await this.groupRepository.find({
+      where: { leaderId: userId },
+      select: ['id'],
+    });
+    for (const g of leaderGroups) {
+      if (!groupIds.includes(g.id)) groupIds.push(g.id);
+    }
+
+    if (groupIds.length === 0) return [];
+
+    return this.groupRepository.find({
+      where: groupIds.map(id => ({ id })),
+      relations: ['leader', 'members', 'project'],
+    });
   }
 
   // 为项目创建讨论组
@@ -240,5 +263,139 @@ export class DiscussionService {
       leader: group.leader,
       members: group.members,
     };
+  }
+
+  // 解散讨论组（仅创建者可操作）
+  async dissolveGroup(groupId: number, userId: number) {
+    const group = await this.groupRepository.findOne({
+      where: { id: groupId },
+      relations: ['members', 'leader'],
+    });
+    if (!group) {
+      throw new NotFoundException('讨论组不存在');
+    }
+
+    if (group.leaderId !== userId) {
+      throw new ForbiddenException('只有创建者才能解散讨论组');
+    }
+
+    // 通知所有成员讨论组已解散
+    const memberIds = group.members.map((m) => m.id);
+    const allMemberIds = [...new Set([...memberIds, group.leaderId])];
+    for (const memberId of allMemberIds) {
+      this.socketGateway.broadcastToUser(memberId, 'discussion.dissolved', {
+        groupId,
+        groupName: group.name,
+      });
+    }
+
+    // 删除消息和讨论组
+    await this.messageRepository.delete({ groupId });
+    await this.groupRepository.remove(group);
+
+    return { message: '讨论组已解散' };
+  }
+
+  // 确保AI机器人用户存在
+  async ensureBotUser(): Promise<number> {
+    let bot = await this.userRepository.findOne({ where: { username: 'ai_bot' } });
+    if (!bot) {
+      bot = this.userRepository.create({
+        username: 'ai_bot',
+        name: BOT_USERNAME,
+        password: Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15),
+        role: 'admin',
+        nickname: BOT_USERNAME,
+      });
+      bot = await this.userRepository.save(bot);
+      console.log(`[DiscussionBot] 创建AI机器人用户, id=${bot.id}`);
+    }
+    return bot.id;
+  }
+
+  // AI机器人发送消息到讨论组（跳过成员验证）
+  async sendBotMessage(
+    groupId: number,
+    content: string,
+    mentionIds?: number[],
+    referenceType?: string,
+    referenceId?: number,
+    referenceData?: any,
+  ) {
+    const group = await this.groupRepository.findOne({
+      where: { id: groupId },
+      relations: ['members'],
+    });
+    if (!group) return null;
+
+    const botId = await this.ensureBotUser();
+
+    // 确保机器人是讨论组成员
+    const isMember = group.members.some((m) => m.id === botId) || group.leaderId === botId;
+    if (!isMember) {
+      group.members.push({ id: botId } as any);
+      await this.groupRepository.save(group);
+    }
+
+    const message = this.messageRepository.create({
+      groupId,
+      senderId: botId,
+      content,
+      referenceType: referenceType || null,
+      referenceId: referenceId || null,
+      referenceData: referenceData ? JSON.stringify(referenceData) : null,
+      mentionIds: mentionIds && mentionIds.length > 0 ? mentionIds.join(',') : null,
+    });
+
+    const result = await this.messageRepository.save(message);
+
+    const savedMessage = await this.messageRepository.findOne({
+      where: { id: result.id },
+      relations: ['sender'],
+    });
+
+    const broadcastData = {
+      ...savedMessage,
+      mentionIds: savedMessage.mentionIds ? savedMessage.mentionIds.split(',').map(Number) : [],
+      referenceData: savedMessage.referenceData ? JSON.parse(savedMessage.referenceData) : null,
+      senderName: BOT_USERNAME,
+      isBot: true,
+    };
+
+    // 向所有组成员广播消息
+    const memberIds = group.members.map((m) => m.id);
+    const allMemberIds = [...new Set([...memberIds, group.leaderId])];
+    for (const memberId of allMemberIds) {
+      this.socketGateway.broadcastToUser(memberId, 'discussion.message', broadcastData);
+    }
+
+    // 通知被@提及的用户
+    if (mentionIds && mentionIds.length > 0) {
+      for (const mentionId of mentionIds) {
+        if (mentionId !== botId) {
+          this.socketGateway.broadcastToUser(mentionId, 'discussion.mentioned', {
+            groupId,
+            groupName: group.name,
+            message: broadcastData,
+          });
+        }
+      }
+    }
+
+    return broadcastData;
+  }
+
+  // 根据项目ID发送AI机器人消息
+  async sendBotMessageByProject(
+    projectId: number,
+    content: string,
+    mentionIds?: number[],
+    referenceType?: string,
+    referenceId?: number,
+    referenceData?: any,
+  ) {
+    const group = await this.findByProject(projectId);
+    if (!group) return null;
+    return this.sendBotMessage(group.id, content, mentionIds, referenceType, referenceId, referenceData);
   }
 }

@@ -8,6 +8,7 @@ interface ClientInfo {
 }
 
 @WebSocketGateway({
+  path: '/api/socket.io',
   cors: {
     origin: process.env.CORS_ORIGIN
       ? process.env.CORS_ORIGIN.split(',')

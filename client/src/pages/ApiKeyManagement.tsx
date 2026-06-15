@@ -13,6 +13,9 @@ import {
   Popconfirm,
   Alert,
   Tabs,
+  Switch,
+  Divider,
+  Select,
 } from 'antd';
 import {
   PlusOutlined,
@@ -21,7 +24,12 @@ import {
   DeleteOutlined,
   StopOutlined,
   ApiOutlined,
+  RobotOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
+import { getSystemLlmConfig, updateSystemLlmConfig } from '../api/system-config';
+import { getProfile, updateProfile } from '../api/auth';
+import { useUserStore } from '../stores/user';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -31,6 +39,15 @@ export default function ApiKeyManagement() {
   const [createModalVisible, setCreateModalVisible] = useState(false);
   const [newKeyData, setNewKeyData] = useState<{ apiKey: string; keyPrefix: string } | null>(null);
   const [form] = Form.useForm();
+
+  // AI配置相关状态
+  const [systemLlm, setSystemLlm] = useState({ baseUrl: '', apiKey: '', model: '', apiKeyConfigured: false });
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [llmForm] = Form.useForm();
+  const user = useUserStore((s: any) => s.user);
+  const [useSystemLlm, setUseSystemLlm] = useState(true);
+  const [userLlm, setUserLlm] = useState({ baseUrl: '', apiKey: '', model: '' });
+  const [userLlmForm] = Form.useForm();
 
   const loadKeys = async () => {
     setLoading(true);
@@ -46,7 +63,27 @@ export default function ApiKeyManagement() {
 
   useEffect(() => {
     loadKeys();
+    loadLlmConfig();
   }, []);
+
+  const loadLlmConfig = async () => {
+    try {
+      const res: any = await getSystemLlmConfig();
+      const data = res.data || res;
+      setSystemLlm(data);
+      llmForm.setFieldsValue({ baseUrl: data.baseUrl, model: data.model });
+    } catch { /* ignore */ }
+    try {
+      const res: any = await getProfile();
+      const profile = res.data || res;
+      setUseSystemLlm(profile.useSystemLlm !== false);
+      setUserLlm({ baseUrl: profile.llmBaseUrl || '', apiKey: '', model: profile.llmModel || '' });
+      userLlmForm.setFieldsValue({
+        baseUrl: profile.llmBaseUrl || '',
+        model: profile.llmModel || '',
+      });
+    } catch { /* ignore */ }
+  };
 
   const handleCreate = async (values: { name: string }) => {
     try {
@@ -146,6 +183,155 @@ export default function ApiKeyManagement() {
 
   return (
     <div>
+      {/* AI大模型配置 */}
+      <Card
+        title={
+          <Space>
+            <RobotOutlined />
+            <span>AI 大模型配置</span>
+          </Space>
+        }
+      >
+        <Alert
+          message="选择 AI 大模型来源"
+          description="您可以使用系统内置的 AI 大模型，也可以配置自己的大模型 API。系统内置模型由管理员统一配置，所有用户共享；自定义模型则使用您自己的 API Key 和配额。"
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+
+        <div style={{ marginBottom: 16 }}>
+          <Space>
+            <Text strong>使用系统内置 AI：</Text>
+            <Switch
+              checked={useSystemLlm}
+              onChange={async (checked) => {
+                setUseSystemLlm(checked);
+                try {
+                  await updateProfile(user?.id, { useSystemLlm: checked });
+                  message.success(checked ? '已切换为系统内置 AI' : '已切换为自定义 AI');
+                } catch {
+                  message.error('切换失败');
+                }
+              }}
+            />
+            {useSystemLlm ? (
+              <Tag color="blue">当前使用系统内置 AI</Tag>
+            ) : (
+              <Tag color="orange">当前使用自定义 AI</Tag>
+            )}
+          </Space>
+        </div>
+
+        <Tabs
+          items={[
+            {
+              key: 'system',
+              label: '系统内置 AI 配置',
+              children: (
+                <div>
+                  <Alert
+                    message={systemLlm.apiKeyConfigured ? '系统 AI 已配置' : '系统 AI 尚未配置，请联系管理员'}
+                    type={systemLlm.apiKeyConfigured ? 'success' : 'warning'}
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                  />
+                  <Form
+                    form={llmForm}
+                    layout="vertical"
+                    onFinish={async (values) => {
+                      setLlmLoading(true);
+                      try {
+                        await updateSystemLlmConfig(values);
+                        message.success('系统 AI 配置已更新');
+                        loadLlmConfig();
+                      } catch {
+                        message.error('更新失败');
+                      } finally {
+                        setLlmLoading(false);
+                      }
+                    }}
+                  >
+                    <Form.Item name="baseUrl" label="API 地址">
+                      <Input placeholder="例如：https://api.openai.com/v1" />
+                    </Form.Item>
+                    <Form.Item name="apiKey" label="API Key">
+                      <Input.Password placeholder={systemLlm.apiKeyConfigured ? '已配置，留空则不修改' : '请输入 API Key'} />
+                    </Form.Item>
+                    <Form.Item name="model" label="模型名称">
+                      <Input placeholder="例如：gpt-4o-mini" />
+                    </Form.Item>
+                    <Form.Item>
+                      <Button type="primary" htmlType="submit" loading={llmLoading} icon={<SettingOutlined />}>
+                        保存系统 AI 配置
+                      </Button>
+                    </Form.Item>
+                  </Form>
+                </div>
+              ),
+            },
+            {
+              key: 'custom',
+              label: '自定义 AI 配置',
+              children: (
+                <div>
+                  <Alert
+                    message="配置您自己的 AI 大模型，将使用您的 API Key 和配额"
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                  />
+                  <Form
+                    form={userLlmForm}
+                    layout="vertical"
+                    onFinish={async (values) => {
+                      setLlmLoading(true);
+                      try {
+                        const updateData: any = {
+                          llmBaseUrl: values.baseUrl || null,
+                          llmModel: values.model || null,
+                        };
+                        if (values.apiKey) updateData.llmApiKey = values.apiKey;
+                        await updateProfile(user?.id, updateData);
+                        message.success('自定义 AI 配置已更新');
+                        // 切换到自定义模式
+                        if (useSystemLlm) {
+                          setUseSystemLlm(false);
+                          await updateProfile(user?.id, { useSystemLlm: false });
+                        }
+                        loadLlmConfig();
+                      } catch {
+                        message.error('更新失败');
+                      } finally {
+                        setLlmLoading(false);
+                      }
+                    }}
+                  >
+                    <Form.Item name="baseUrl" label="API 地址">
+                      <Input placeholder="例如：https://api.openai.com/v1" />
+                    </Form.Item>
+                    <Form.Item name="apiKey" label="API Key">
+                      <Input.Password placeholder="留空则不修改" />
+                    </Form.Item>
+                    <Form.Item name="model" label="模型名称">
+                      <Input placeholder="例如：gpt-4o-mini" />
+                    </Form.Item>
+                    <Form.Item>
+                      <Button type="primary" htmlType="submit" loading={llmLoading} icon={<SettingOutlined />}>
+                        保存自定义 AI 配置
+                      </Button>
+                    </Form.Item>
+                  </Form>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </Card>
+
+      <Divider />
+
+      {/* API Key 管理 */}
       <Card
         title={
           <Space>

@@ -24,7 +24,7 @@ import {
   SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { getProjects } from '../api/project';
-import { getPositions, getDashboardStats } from '../api/position';
+import { getPositions, getDashboardStats, getUploadStats } from '../api/position';
 import StatusTag from '../components/StatusTag';
 
 const { Title: SectionTitle } = Typography;
@@ -67,6 +67,10 @@ export default function Dashboard() {
     recentActivities: [],
   });
   const [urgentPositions, setUrgentPositions] = useState<any[]>([]);
+  const [uploadStats, setUploadStats] = useState<any[]>([]);
+  const [uploadStatsLoading, setUploadStatsLoading] = useState(false);
+  const [uploadStartDate, setUploadStartDate] = useState<string | undefined>();
+  const [uploadEndDate, setUploadEndDate] = useState<string | undefined>();
 
   const loadData = useCallback(async () => {
     try {
@@ -98,6 +102,28 @@ export default function Dashboard() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // 加载每日上传统计
+  const loadUploadStats = useCallback(async () => {
+    try {
+      setUploadStatsLoading(true);
+      const res: any = await getUploadStats({
+        projectId: selectedProjectId,
+        startDate: uploadStartDate,
+        endDate: uploadEndDate,
+      });
+      const data = res.data || res;
+      setUploadStats(data.details || []);
+    } catch {
+      console.error('获取上传统计失败');
+    } finally {
+      setUploadStatsLoading(false);
+    }
+  }, [selectedProjectId, uploadStartDate, uploadEndDate]);
+
+  useEffect(() => {
+    loadUploadStats();
+  }, [loadUploadStats]);
 
   const urgencyColorMap: Record<string, string> = {
     low: 'green',
@@ -310,6 +336,87 @@ export default function Dashboard() {
           columns={activityColumns}
           scroll={{ x: 950, y: 400 }}
           size="middle"
+        />
+      </Card>
+
+      {/* 每日推荐上传统计 */}
+      <Card
+        title="每日推荐上传统计"
+        style={{ marginTop: 16, borderRadius: 8 }}
+        extra={
+          <Space>
+            <span style={{ fontSize: 13, color: '#666' }}>日期筛选：</span>
+            <DatePicker.RangePicker
+              size="small"
+              onChange={(_, dateStrings) => {
+                setUploadStartDate(dateStrings[0] || undefined);
+                setUploadEndDate(dateStrings[1] || undefined);
+              }}
+              allowClear
+              placeholder={['开始日期', '结束日期']}
+            />
+          </Space>
+        }
+      >
+        <Table
+          dataSource={uploadStats}
+          rowKey={(r) => `${r.date}-${r.recommenderId}-${r.positionId}`}
+          loading={uploadStatsLoading}
+          pagination={{ pageSize: 15, showTotal: (t) => `共 ${t} 条` }}
+          locale={{ emptyText: '暂无上传统计数据' }}
+          size="middle"
+          scroll={{ x: 700 }}
+          columns={[
+            {
+              title: '日期',
+              dataIndex: 'date',
+              key: 'date',
+              width: 120,
+              sorter: (a: any, b: any) => a.date?.localeCompare(b.date),
+              defaultSortOrder: 'descend',
+            },
+            {
+              title: '上传者',
+              dataIndex: 'recommenderName',
+              key: 'recommenderName',
+              width: 110,
+            },
+            {
+              title: '项目',
+              dataIndex: 'projectName',
+              key: 'projectName',
+              width: 140,
+              render: (v: string) => v || '-',
+            },
+            {
+              title: '岗位',
+              dataIndex: 'positionDuty',
+              key: 'positionDuty',
+              width: 160,
+              render: (v: string) => v || '-',
+            },
+            {
+              title: '上传数量',
+              dataIndex: 'count',
+              key: 'count',
+              width: 100,
+              sorter: (a: any, b: any) => a.count - b.count,
+              render: (v: number) => <Tag color="blue">{v}</Tag>,
+            },
+          ]}
+          summary={(data) => {
+            const total = data.reduce((sum, r) => sum + r.count, 0);
+            return data.length > 0 ? (
+              <Table.Summary.Row>
+                <Table.Summary.Cell index={0} colSpan={4}>
+                  <div style={{ textAlign: 'right', fontWeight: 600 }}>合计</div>
+                </Table.Summary.Cell>
+                <Table.Summary.Cell index={1}>
+                  <Tag color="green" style={{ fontWeight: 600 }}>{total}</Tag>
+                </Table.Summary.Cell>
+              </Table.Summary.Row>
+            ) : null;
+          }}
         />
       </Card>
 

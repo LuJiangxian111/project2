@@ -20,6 +20,7 @@ export interface SocketEventMap {
   'candidate.statusUpdated': (data: { cpId: number; status: string; candidateName: string }) => void;
   'candidate.matched': (data: { candidateId: number; positionId: number; score: number }) => void;
   'discussion.message': (data: { groupId: number; message: any }) => void;
+  'discussion.dissolved': (data: { groupId: number; groupName: string }) => void;
 }
 
 const eventListeners = new Map<keyof SocketEventMap, Set<(data: any) => void>>();

@@ -17,7 +17,7 @@ export interface Interview {
   interviewer?: any;
 }
 
-export const getInterviews = (params?: { result?: string; projectId?: number; candidatePositionId?: number }) =>
+export const getInterviews = (params?: { result?: string; projectId?: number; candidatePositionId?: number; positionId?: number }) =>
   request.get('/interviews', { params });
 export const createInterview = (data: Partial<Interview>) => request.post('/interviews', data);
 export const updateInterview = (id: number, data: Partial<Interview>) => request.put(`/interviews/${id}`, data);
