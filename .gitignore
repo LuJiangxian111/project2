@@ -4,3 +4,11 @@ data/
 uploads/
 *.db
 .env
+
+# Deploy packages
+*.tar
+
+# Test scripts
+test-*.js
+check-deps.js
+check-frontend.js
