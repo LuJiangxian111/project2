@@ -74,7 +74,7 @@ export default function ProjectDetail() {
           <Descriptions.Item label="状态">
             <StatusTag status={project.status} type="project" />
           </Descriptions.Item>
-          <Descriptions.Item label="负责人">{project.manager || '-'}</Descriptions.Item>
+          <Descriptions.Item label="负责人">{project.manager?.name || project.manager?.nickname || '-'}</Descriptions.Item>
           <Descriptions.Item label="开始日期">{project.startDate ? project.startDate.substring(0, 10) : '-'}</Descriptions.Item>
           <Descriptions.Item label="结束日期">{project.endDate ? project.endDate.substring(0, 10) : '-'}</Descriptions.Item>
           <Descriptions.Item label="描述" span={3}>{project.description || '暂无描述'}</Descriptions.Item>
@@ -102,10 +102,10 @@ export default function ProjectDetail() {
                     columns={[
                       {
                         title: '岗位名称',
-                        dataIndex: 'title',
-                        key: 'title',
+                        dataIndex: 'positionDuty',
+                        key: 'positionDuty',
                         render: (text: string, record: any) => (
-                          <a onClick={() => navigate(`/positions/${record.id}`)}>{text}</a>
+                          <a onClick={() => navigate(`/positions/${record.id}`)}>{text || record.systemName || '-'}</a>
                         ),
                       },
                       {
@@ -158,7 +158,7 @@ export default function ProjectDetail() {
                 <Descriptions column={{ xs: 1, sm: 2 }}>
                   <Descriptions.Item label="项目名称">{project.name}</Descriptions.Item>
                   <Descriptions.Item label="状态"><StatusTag status={project.status} type="project" /></Descriptions.Item>
-                  <Descriptions.Item label="负责人">{project.manager || '-'}</Descriptions.Item>
+                  <Descriptions.Item label="负责人">{project.manager?.name || project.manager?.nickname || '-'}</Descriptions.Item>
                   <Descriptions.Item label="开始日期">{project.startDate ? project.startDate.substring(0, 10) : '-'}</Descriptions.Item>
                   <Descriptions.Item label="结束日期">{project.endDate ? project.endDate.substring(0, 10) : '-'}</Descriptions.Item>
                   <Descriptions.Item label="创建时间">{project.createdAt ? new Date(project.createdAt).toLocaleString('zh-CN') : '-'}</Descriptions.Item>

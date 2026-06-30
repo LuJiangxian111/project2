@@ -24,7 +24,11 @@ export class ProjectService {
   }) {
     const qb = this.projectRepository
       .createQueryBuilder('project')
-      .leftJoinAndSelect('project.manager', 'manager');
+      .leftJoinAndSelect('project.manager', 'manager')
+      .leftJoin('project.positions', 'position')
+      .addSelect('COUNT(position.id)', 'positionCount')
+      .groupBy('project.id')
+      .addGroupBy('manager.id');
 
     if (query?.status) {
       qb.andWhere('project.status = :status', { status: query.status });
@@ -41,7 +45,14 @@ export class ProjectService {
     }
 
     qb.orderBy('project.createdAt', 'DESC');
-    return qb.getMany();
+    const rawResults = await qb.getRawAndEntities();
+    return rawResults.entities.map((entity, index) => {
+      const raw = rawResults.raw[index];
+      return {
+        ...entity,
+        positionCount: parseInt(raw.positionCount, 10) || 0,
+      };
+    });
   }
 
   async findOne(id: number) {

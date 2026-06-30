@@ -57,7 +57,7 @@ export default function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="projects" element={<ProjectList />} />
-        <Route path="projects/:id" element={<ProjectDetail />} />
+        <Route path="projects/:id" element={<ErrorBoundary><ProjectDetail /></ErrorBoundary>} />
         <Route path="market" element={<PositionMarket />} />
         <Route path="positions/:id" element={<PositionDetail />} />
         <Route path="candidates" element={<CandidateList />} />
