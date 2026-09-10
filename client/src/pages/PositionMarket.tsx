@@ -24,7 +24,7 @@ const urgencyLabelMap: Record<string, string> = {
 const IMPORT_FIELDS = [
   'systemName', 'department', 'requirementNumber', 'positionType', 'positionDuty',
   'techDomain', 'majorType', 'levelDistribution', 'salaryRange', 'requirements',
-  'responsibilities', 'domainExperience', 'region', 'deliveryForm', 'urgency',
+  'responsibilities', 'domainExperience', 'region', 'serviceLocation', 'deliveryForm', 'urgency',
   'headcount', 'expectedDate', 'positionImplementation',
 ];
 
@@ -33,7 +33,7 @@ const FIELD_LABELS: Record<string, string> = {
   positionType: '岗位类型', positionDuty: '岗位职务', techDomain: '技术领域',
   majorType: '专业类型', levelDistribution: '职级分布', salaryRange: '薪资范围',
   requirements: '岗位要求', responsibilities: '岗位职责', domainExperience: '领域经验',
-  region: '地区', deliveryForm: '交付形式', urgency: '紧急程度',
+  region: '地区', serviceLocation: '服务地点', deliveryForm: '交付形式', urgency: '紧急程度',
   headcount: '需求人数', expectedDate: '期望到岗日期', positionImplementation: '岗位实施',
 };
 

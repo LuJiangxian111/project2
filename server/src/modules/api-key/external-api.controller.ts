@@ -13,6 +13,8 @@ import {
   UploadedFile,
   UploadedFiles,
   Inject,
+  ParseIntPipe,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiKeyGuard } from '../../common/guards/api-key.guard';
 import { ProjectService } from '../project/project.service';
@@ -21,6 +23,8 @@ import { CandidateService } from '../candidate/candidate.service';
 import { InterviewService } from '../interview/interview.service';
 import { AiService } from '../ai/ai.service';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { join } from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Project } from '../../entities/project.entity';
@@ -166,6 +170,168 @@ export class ExternalApiController {
     @Request() req: any,
   ) {
     return this.candidateService.updateCandidatePositionStatus(cpId, body.status, req.user.id);
+  }
+
+  // ===== 简历文件上传（multipart/form-data） =====
+
+  // 一步完成：上传简历文件 + AI解析 + 匹配/创建候选人
+  @Post('positions/:id/resume-upload')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'resumes'),
+      filename: (_req: any, file: any, cb: any) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = (file.originalname || '').split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  }))
+  async smartUploadResumeFile(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req: any,
+  ) {
+    const { url, fileName, extractedText } = await this.positionService.uploadResumeFile(file);
+    return this.positionService.smartUploadResume(id, url, fileName, extractedText, req.user.id);
+  }
+
+  // 兼容别名：外部AI常见猜测路径 /positions/:id/candidates/upload
+  @Post('positions/:id/candidates/upload')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'resumes'),
+      filename: (_req: any, file: any, cb: any) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = (file.originalname || '').split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  }))
+  async uploadResumePositionAlias(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req: any,
+  ) {
+    const { url, fileName, extractedText } = await this.positionService.uploadResumeFile(file);
+    return this.positionService.smartUploadResume(id, url, fileName, extractedText, req.user.id);
+  }
+
+  // 兼容路径：/upload-resume、/candidates/upload-resume、/candidates/upload、/resumes/upload、/resume、/upload
+  // positionId 通过 query 参数（?positionId=2）或 multipart 表单字段 positionId 传入
+  @Post([
+    'upload-resume',
+    'candidates/upload-resume',
+    'candidates/upload',
+    'candidates/upload-file',
+    'candidates/resume',
+    'resumes/upload',
+    'resumes',
+    'resume',
+    'upload',
+    'file',
+  ])
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'resumes'),
+      filename: (_req: any, file: any, cb: any) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = (file.originalname || '').split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  }))
+  async uploadResumeFlexible(
+    @UploadedFile() file: Express.Multer.File,
+    @Request() req: any,
+    @Query('positionId') queryPositionId?: string,
+  ) {
+    if (!file) {
+      throw new BadRequestException('缺少文件。请用 multipart/form-data 上传，文件字段名为 file。正确用法：POST /api/external/positions/{岗位ID}/resume-upload');
+    }
+    // positionId 优先级：query 参数 > multipart 表单字段
+    const rawId = queryPositionId || req.body?.positionId || req.body?.position_id;
+    const positionId = Number(rawId);
+    if (!rawId || isNaN(positionId)) {
+      throw new BadRequestException(
+        '缺少岗位ID。两种方式：1) POST /api/external/positions/{岗位ID}/resume-upload；2) 本端点加 query 参数 ?positionId=岗位ID 或表单字段 positionId。可用 GET /api/external/positions 查询岗位列表获取ID',
+      );
+    }
+    const { url, fileName, extractedText } = await this.positionService.uploadResumeFile(file);
+    return this.positionService.smartUploadResume(positionId, url, fileName, extractedText, req.user.id);
+  }
+
+  // 批量上传简历文件（一次最多20个），逐个AI解析并匹配/创建候选人
+  @Post('positions/:id/resume-upload-batch')
+  @UseInterceptors(FilesInterceptor('files', 20, {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'resumes'),
+      filename: (_req: any, file: any, cb: any) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = (file.originalname || '').split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  }))
+  async smartUploadResumeFiles(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFiles() files: Express.Multer.File[],
+    @Request() req: any,
+  ) {
+    const results: any[] = [];
+    let success = 0;
+    let failed = 0;
+    for (const file of files || []) {
+      try {
+        const { url, fileName, extractedText } = await this.positionService.uploadResumeFile(file);
+        const result = await this.positionService.smartUploadResume(id, url, fileName, extractedText, req.user.id);
+        results.push({ file: Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8'), success: true, ...result });
+        success++;
+      } catch (err: any) {
+        results.push({ file: Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8'), success: false, error: err?.message || '上传失败' });
+        failed++;
+      }
+    }
+    return { success, failed, results };
+  }
+
+  // 仅上传简历文件（不创建候选人），返回 url/fileName/extractedText
+  @Post('positions/:id/resume-library/upload')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'resumes'),
+      filename: (_req: any, file: any, cb: any) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = (file.originalname || '').split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 20 * 1024 * 1024 },
+  }))
+  async uploadResumeToLibrary(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.positionService.uploadResumeFile(file);
+  }
+
+  // 两步上传第二步：用已上传文件的 url 创建候选人（AI解析 + 匹配/创建）
+  @Post('positions/:id/resume-library/smart-upload')
+  async smartUploadResume(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() body: { fileUrl: string; fileName: string; extractedText?: string },
+    @Request() req: any,
+  ) {
+    return this.positionService.smartUploadResume(
+      id,
+      body.fileUrl,
+      body.fileName,
+      body.extractedText || '',
+      req.user.id,
+    );
   }
 
   // ===== Candidates =====

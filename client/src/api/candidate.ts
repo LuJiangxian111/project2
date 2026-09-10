@@ -44,6 +44,8 @@ export interface CreateCandidateParams {
 export const getCandidates = () => request.get('/candidates');
 export const getCandidatesGrouped = (params?: { keyword?: string; projectId?: number; positionId?: number; status?: string }) =>
   request.get('/candidates/grouped', { params });
+export const getCandidatesList = (params?: { keyword?: string; projectId?: number; positionId?: number; status?: string; recommenderId?: number }) =>
+  request.get('/candidates/list', { params });
 export const createCandidate = (data: CreateCandidateParams) => request.post('/candidates', data);
 export const getCandidate = (id: number) => request.get(`/candidates/${id}`);
 export const updateCandidate = (id: number, data: Partial<CreateCandidateParams>) => request.put(`/candidates/${id}`, data);

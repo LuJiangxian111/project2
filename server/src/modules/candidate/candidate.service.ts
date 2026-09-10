@@ -151,8 +151,10 @@ export class CandidateService {
           projectName: (cp.position as any)?.project?.name,
           status: cp.status,
           matchScore: cp.matchScore,
+          matchDetail: cp.matchDetail,
           recommendReason: cp.recommendReason,
           recommender: cp.recommender,
+          recommenderId: cp.recommenderId,
           pushDate: cp.pushDate,
           implementation: cp.implementation,
           resumeUrl: cp.resumeUrl,
@@ -163,6 +165,78 @@ export class CandidateService {
     });
 
     return groups;
+  }
+
+  /**
+   * 扁平列表视图：每条记录是一个候选人-岗位关联
+   */
+  async findAllFlatList(query?: {
+    keyword?: string;
+    projectId?: number;
+    positionId?: number;
+    status?: string;
+    recommenderId?: number;
+  }) {
+    const qb = this.candidatePositionRepository
+      .createQueryBuilder('cp')
+      .innerJoinAndSelect('cp.candidate', 'candidate')
+      .innerJoinAndSelect('cp.position', 'position')
+      .leftJoinAndSelect('position.project', 'project');
+
+    if (query?.keyword) {
+      qb.andWhere(
+        '(candidate.name LIKE :keyword OR candidate.contactPhone LIKE :keyword)',
+        { keyword: `%${query.keyword}%` },
+      );
+    }
+    if (query?.projectId) {
+      qb.andWhere('position.projectId = :projectId', {
+        projectId: query.projectId,
+      });
+    }
+    if (query?.positionId) {
+      qb.andWhere('cp.positionId = :positionId', {
+        positionId: query.positionId,
+      });
+    }
+    if (query?.status) {
+      qb.andWhere('cp.status = :status', { status: query.status });
+    }
+    if (query?.recommenderId) {
+      qb.andWhere('cp.recommenderId = :recommenderId', {
+        recommenderId: query.recommenderId,
+      });
+    }
+
+    qb.orderBy('cp.recommendedAt', 'DESC');
+
+    const results = await qb.getMany();
+
+    return results.map((cp) => ({
+      cpId: cp.id,
+      candidateId: cp.candidateId,
+      candidateName: cp.candidate?.name || '未知',
+      contactPhone: cp.candidate?.contactPhone || '',
+      supplier: cp.candidate?.supplier || '',
+      positionId: cp.positionId,
+      positionDuty: cp.position?.positionDuty || '',
+      positionType: cp.position?.positionType || '',
+      requirementNumber: cp.position?.requirementNumber || '',
+      department: (cp.position as any)?.department || '',
+      projectId: cp.position?.projectId,
+      projectName: (cp.position as any)?.project?.name || '',
+      status: cp.status,
+      matchScore: cp.matchScore || 0,
+      matchDetail: cp.matchDetail || null,
+      recommendReason: cp.recommendReason || '',
+      recommender: cp.recommender || '',
+      recommenderId: cp.recommenderId,
+      pushDate: cp.pushDate,
+      implementation: cp.implementation || '',
+      resumeUrl: cp.resumeUrl || cp.candidate?.resumeUrl || null,
+      recommendedAt: cp.recommendedAt,
+      updatedAt: cp.updatedAt,
+    }));
   }
 
   async updateCandidatePositionStatus(
@@ -373,6 +447,7 @@ export class CandidateService {
     if (cp) {
       cp.matchScore = matchResult.score;
       cp.matchDetail = JSON.stringify(matchResult.detail);
+      if (matchResult.recommendReason) cp.recommendReason = matchResult.recommendReason;
       await this.candidatePositionRepository.save(cp);
     } else {
       cp = this.candidatePositionRepository.create({

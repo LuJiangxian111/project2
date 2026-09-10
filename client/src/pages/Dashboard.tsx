@@ -14,6 +14,8 @@ import {
   Progress,
   Space,
   DatePicker,
+  Modal,
+  Button,
 } from 'antd';
 import {
   ProjectOutlined,
@@ -25,6 +27,8 @@ import {
 } from '@ant-design/icons';
 import { getProjects } from '../api/project';
 import { getPositions, getDashboardStats, getUploadStats } from '../api/position';
+import { getCandidatesList } from '../api/candidate';
+import { getInterviews } from '../api/interview';
 import StatusTag from '../components/StatusTag';
 
 const { Title: SectionTitle } = Typography;
@@ -72,6 +76,12 @@ export default function Dashboard() {
   const [uploadStartDate, setUploadStartDate] = useState<string | undefined>();
   const [uploadEndDate, setUploadEndDate] = useState<string | undefined>();
 
+  // 卡片详情弹窗
+  const [detailModal, setDetailModal] = useState<{ type: string; title: string } | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailData, setDetailData] = useState<any[]>([]);
+  const [allPositions, setAllPositions] = useState<any[]>([]);
+
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
@@ -87,6 +97,7 @@ export default function Dashboard() {
 
       setProjects(projectsData);
       setStats(statsData);
+      setAllPositions(positionsData);
       setUrgentPositions(
         positionsData
           .filter((p: any) => p.urgency === 'high' || p.urgency === 'critical')
@@ -136,6 +147,109 @@ export default function Dashboard() {
     medium: '中',
     high: '高',
     critical: '紧急',
+  };
+
+  // 打开卡片详情弹窗
+  const openDetail = async (type: string, title: string) => {
+    setDetailModal({ type, title });
+    setDetailLoading(true);
+    setDetailData([]);
+    try {
+      if (type === 'openPositions') {
+        // 在招岗位列表（本地过滤）
+        setDetailData(allPositions.filter((p: any) => p.status === 'open' || p.status === 'partial'));
+      } else if (type === 'candidates') {
+        const res: any = await getCandidatesList(selectedProjectId ? { projectId: selectedProjectId } : undefined);
+        setDetailData(res.data || res || []);
+      } else if (type === 'interviews') {
+        const res: any = await getInterviews(selectedProjectId ? { projectId: selectedProjectId } : undefined);
+        setDetailData(res.data || res || []);
+      } else if (type === 'screeningRate' || type === 'interviewRate') {
+        // 按岗位统计通过率
+        const res: any = await getCandidatesList(selectedProjectId ? { projectId: selectedProjectId } : undefined);
+        const list = res.data || res || [];
+        const byPosition = new Map<number, any>();
+        list.forEach((cp: any) => {
+          if (!cp.positionId) return;
+          if (!byPosition.has(cp.positionId)) {
+            byPosition.set(cp.positionId, {
+              positionId: cp.positionId,
+              positionTitle: cp.positionDuty || cp.positionTitle || '-',
+              projectName: cp.projectName || '-',
+              total: 0,
+              screenPassed: 0,
+              interviewPassed: 0,
+            });
+          }
+          const item = byPosition.get(cp.positionId);
+          item.total++;
+          const s = cp.status;
+          // 筛选通过及后续阶段
+          if (['screen_passed', 'pending_interview', 'interview_passed', 'pending_onboard', 'onboarded'].includes(s)) item.screenPassed++;
+          // 面试通过及入职阶段
+          if (['interview_passed', 'pending_onboard', 'onboarded'].includes(s)) item.interviewPassed++;
+        });
+        setDetailData(Array.from(byPosition.values()));
+      }
+    } catch (err) {
+      console.error('加载详情失败', err);
+    } finally {
+      setDetailLoading(false);
+    }
+  };
+
+  // 详情弹窗各类型列定义
+  const getDetailColumns = () => {
+    const type = detailModal?.type;
+    if (type === 'openPositions') {
+      return [
+        { title: '岗位职务', dataIndex: 'positionDuty', key: 'positionDuty', width: 160 },
+        { title: '项目', key: 'projectName', width: 140, render: (_: any, r: any) => r.project?.name || r.projectName || '-' },
+        { title: '部门', dataIndex: 'department', key: 'department', width: 100, render: (v: string) => v || '-' },
+        { title: '需求人数', dataIndex: 'requiredCount', key: 'requiredCount', width: 90 },
+        { title: '已录用', dataIndex: 'hiredCount', key: 'hiredCount', width: 80, render: (v: number) => v || 0 },
+        { title: '紧急程度', dataIndex: 'urgency', key: 'urgency', width: 90, render: (v: string) => <Tag color={urgencyColorMap[v] || 'default'}>{urgencyLabelMap[v] || v}</Tag> },
+        { title: '服务地点', dataIndex: 'serviceLocation', key: 'serviceLocation', width: 140, render: (v: string) => v || '-' },
+        { title: '操作', key: 'action', width: 80, render: (_: any, r: any) => <a onClick={() => navigate(`/positions/${r.id}`)}>详情</a> },
+      ];
+    }
+    if (type === 'candidates') {
+      return [
+        { title: '姓名', dataIndex: 'candidateName', key: 'candidateName', width: 90 },
+        { title: '项目', dataIndex: 'projectName', key: 'projectName', width: 120, render: (v: string) => v || '-' },
+        { title: '岗位', dataIndex: 'positionDuty', key: 'positionDuty', width: 140, render: (v: string) => v || '-' },
+        { title: '推荐人', dataIndex: 'recommender', key: 'recommender', width: 90, render: (v: string) => v || '-' },
+        { title: '推荐日期', dataIndex: 'pushDate', key: 'pushDate', width: 110, render: (v: string) => v ? v.substring(0, 10) : '-' },
+        { title: '状态', dataIndex: 'status', key: 'status', width: 130, render: (v: string) => <StatusTag status={v} type="candidate" /> },
+      ];
+    }
+    if (type === 'interviews') {
+      return [
+        { title: '候选人', dataIndex: 'candidateName', key: 'candidateName', width: 100, render: (_: any, r: any) => r.candidatePosition?.candidate?.name || r.candidateName || '-' },
+        { title: '岗位', key: 'positionDuty', width: 140, render: (_: any, r: any) => r.candidatePosition?.position?.positionDuty || r.positionDuty || '-' },
+        { title: '轮次', dataIndex: 'round', key: 'round', width: 70 },
+        { title: '面试时间', dataIndex: 'scheduledAt', key: 'scheduledAt', width: 160, render: (v: string) => v ? new Date(v).toLocaleString('zh-CN') : '-' },
+        { title: '形式', dataIndex: 'interviewType', key: 'interviewType', width: 80, render: (v: string) => v === 'online' ? '线上' : v === 'onsite' ? '现场' : v || '-' },
+        { title: '结果', dataIndex: 'result', key: 'result', width: 100, render: (v: string) => v ? <StatusTag status={v} type="interview" /> : '待定' },
+      ];
+    }
+    // 通过率
+    const isScreen = type === 'screeningRate';
+    return [
+      { title: '岗位', dataIndex: 'positionTitle', key: 'positionTitle', width: 160 },
+      { title: '项目', dataIndex: 'projectName', key: 'projectName', width: 130, render: (v: string) => v || '-' },
+      { title: '候选人总数', dataIndex: 'total', key: 'total', width: 100 },
+      { title: isScreen ? '筛选通过数' : '面试通过数', dataIndex: isScreen ? 'screenPassed' : 'interviewPassed', key: 'passCount', width: 110 },
+      {
+        title: '通过率',
+        key: 'rate',
+        width: 140,
+        render: (_: any, r: any) => {
+          const rate = r.total > 0 ? Math.round(((isScreen ? r.screenPassed : r.interviewPassed) / r.total) * 100) : 0;
+          return <Progress percent={rate} size="small" style={{ width: 100 }} strokeColor={isScreen ? '#1890ff' : '#52c41a'} />;
+        },
+      },
+    ];
   };
 
   const filteredActivities = stats.recentActivities.filter((a) => {
@@ -224,33 +338,36 @@ export default function Dashboard() {
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card hoverable style={{ borderRadius: 8, borderTop: '3px solid #52c41a' }}>
+          <Card hoverable style={{ borderRadius: 8, borderTop: '3px solid #52c41a' }} onClick={() => openDetail('openPositions', '在招岗位详情')}>
             <Statistic
               title="在招岗位"
               value={stats.openPositions}
               prefix={<ShopOutlined />}
               valueStyle={{ color: '#52c41a' }}
             />
+            <div style={{ marginTop: 4, fontSize: 12, color: '#999' }}>点击查看岗位列表</div>
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card hoverable style={{ borderRadius: 8, borderTop: '3px solid #722ed1' }}>
+          <Card hoverable style={{ borderRadius: 8, borderTop: '3px solid #722ed1' }} onClick={() => openDetail('candidates', '候选人概览')}>
             <Statistic
               title="候选人总数"
               value={stats.totalCandidates}
               prefix={<TeamOutlined />}
               valueStyle={{ color: '#722ed1' }}
             />
+            <div style={{ marginTop: 4, fontSize: 12, color: '#999' }}>点击查看候选人</div>
           </Card>
         </Col>
         <Col xs={12} sm={6}>
-          <Card hoverable style={{ borderRadius: 8, borderTop: '3px solid #fa8c16' }}>
+          <Card hoverable style={{ borderRadius: 8, borderTop: '3px solid #fa8c16' }} onClick={() => openDetail('interviews', '面试安排详情')}>
             <Statistic
               title="面试安排"
               value={stats.totalInterviews}
               prefix={<CalendarOutlined />}
               valueStyle={{ color: '#fa8c16' }}
             />
+            <div style={{ marginTop: 4, fontSize: 12, color: '#999' }}>点击查看面试</div>
           </Card>
         </Col>
       </Row>
@@ -261,12 +378,14 @@ export default function Dashboard() {
           <Card
             hoverable
             style={{ borderRadius: 8 }}
+            onClick={() => openDetail('screeningRate', '各岗位筛选通过率')}
             title={
               <Space>
                 <SafetyCertificateOutlined style={{ color: '#1890ff' }} />
                 <span>筛选通过率</span>
               </Space>
             }
+            extra={<span style={{ fontSize: 12, color: '#999' }}>点击查看各岗位详情</span>}
           >
             <div style={{ textAlign: 'center' }}>
               <Progress
@@ -286,12 +405,14 @@ export default function Dashboard() {
           <Card
             hoverable
             style={{ borderRadius: 8 }}
+            onClick={() => openDetail('interviewRate', '各岗位面试通过率')}
             title={
               <Space>
                 <CheckCircleOutlined style={{ color: '#52c41a' }} />
                 <span>面试通过率</span>
               </Space>
             }
+            extra={<span style={{ fontSize: 12, color: '#999' }}>点击查看各岗位详情</span>}
           >
             <div style={{ textAlign: 'center' }}>
               <Progress
@@ -445,6 +566,25 @@ export default function Dashboard() {
           )}
         />
       </Card>
+      {/* 卡片详情弹窗 */}
+      <Modal
+        open={!!detailModal}
+        onCancel={() => setDetailModal(null)}
+        width={860}
+        title={detailModal?.title}
+        footer={<Button onClick={() => setDetailModal(null)}>关闭</Button>}
+      >
+        <Table
+          dataSource={detailData}
+          rowKey={(r) => String(r.id ?? r.cpId ?? r.positionId ?? r.candidatePositionId ?? JSON.stringify(r))}
+          loading={detailLoading}
+          columns={getDetailColumns() as any}
+          pagination={{ pageSize: 10, showTotal: (t) => `共 ${t} 条` }}
+          size="small"
+          scroll={{ x: 800 }}
+          locale={{ emptyText: '暂无数据' }}
+        />
+      </Modal>
     </Spin>
   );
 }

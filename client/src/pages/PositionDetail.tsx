@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { Card, Descriptions, Table, Button, Space, Spin, message, Modal, Upload, Steps, Input, Tag, Checkbox, Form, Select, Row, Col, Divider, Popconfirm, Tabs } from 'antd';
-import { ArrowLeftOutlined, RobotOutlined, PlusOutlined, ImportOutlined, UploadOutlined, SearchOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, DownloadOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
+import { ArrowLeftOutlined, RobotOutlined, PlusOutlined, ImportOutlined, UploadOutlined, InboxOutlined, SearchOutlined, EditOutlined, DeleteOutlined, FilePdfOutlined, DownloadOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons';
 import { getPosition, getPositionCandidates, addCandidateToPosition, batchImportCandidates, updatePosition, getResumeLibrary, uploadResumeFile, smartUploadResume, exportResumes } from '../api/position';
 import { matchAnalysis, analyzeFile } from '../api/ai';
 import { getCandidate } from '../api/candidate';
 import { getProjects } from '../api/project';
+import { getUsers } from '../api/auth';
 import StatusTag from '../components/StatusTag';
 import MatchScoreTag from '../components/MatchScoreTag';
 import CandidateModal from '../components/CandidateModal';
@@ -45,6 +46,7 @@ export default function PositionDetail() {
   const [editForm] = Form.useForm();
   const [saving, setSaving] = useState(false);
   const [projectList, setProjectList] = useState<any[]>([]);
+  const [userOptions, setUserOptions] = useState<{ label: string; value: string }[]>([]);
 
   // 导入候选人相关状态
   const [importModalOpen, setImportModalOpen] = useState(false);
@@ -206,6 +208,27 @@ export default function PositionDetail() {
     loadData();
   };
 
+  // ========== 简历库整页拖拽上传 ==========
+  const [dragDepth, setDragDepth] = useState(0);
+
+  const handleDropFiles = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragDepth(0);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (!files.length) return;
+    // 仅接受 PDF / Word 格式
+    const valid = files.filter((f) => /\.(pdf|doc|docx)$/i.test(f.name));
+    if (!valid.length) {
+      message.warning('仅支持 PDF / Word 格式的简历文件');
+      return;
+    }
+    if (valid.length === 1) {
+      handleResumeUpload(valid[0]);
+    } else {
+      handleBatchResumeUpload(valid);
+    }
+  };
+
   // 更新候选人筛选状态
   const handleScreenStatus = async (cpId: number, status: string) => {
     try {
@@ -253,6 +276,11 @@ export default function PositionDetail() {
 
   useEffect(() => {
     if (id) loadData();
+    // 加载用户列表，用于岗位实施转派
+    getUsers().then((res: any) => {
+      const list = res.data || res || [];
+      setUserOptions(list.map((u: any) => ({ label: u.name || u.username, value: u.name || u.username })));
+    }).catch(() => {});
   }, [id]);
 
   // 处理URL中的highlight参数，自动跳转到简历库并高亮
@@ -330,6 +358,7 @@ export default function PositionDetail() {
       responsibilities: position.responsibilities,
       domainExperience: position.domainExperience,
       region: position.region,
+      serviceLocation: position.serviceLocation,
       deliveryForm: position.deliveryForm,
       urgency: position.urgency,
       headcount: position.requiredCount,
@@ -487,38 +516,55 @@ export default function PositionDetail() {
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />;
   if (!position) return <div>岗位不存在</div>;
 
-  // 简历库标签页内容
+  // 简历库标签页内容（整个区域支持拖拽文件上传）
   const renderResumeLibrary = () => (
-    <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+    <div
+      style={{ position: 'relative', minHeight: 300 }}
+      onDragEnter={(e) => {
+        e.preventDefault();
+        if (e.dataTransfer?.types?.includes('Files')) setDragDepth((d) => d + 1);
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+      }}
+      onDragLeave={() => setDragDepth((d) => Math.max(0, d - 1))}
+      onDrop={handleDropFiles}
+    >
+      {/* 拖拽遮罩提示 */}
+      {dragDepth > 0 && (
+        <div style={{
+          position: 'absolute', inset: 0, zIndex: 1000,
+          background: 'rgba(24, 144, 255, 0.08)',
+          border: '2px dashed #1890ff', borderRadius: 8,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+          pointerEvents: 'none',
+        }}>
+          <InboxOutlined style={{ fontSize: 48, color: '#1890ff', marginBottom: 12 }} />
+          <div style={{ fontSize: 16, color: '#1890ff', fontWeight: 500 }}>松开鼠标即可上传简历</div>
+          <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>支持单个或批量，PDF / Word 格式</div>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <Space>
           <Upload
-            beforeUpload={(file) => {
-              handleResumeUpload(file);
-              return false;
-            }}
-            showUploadList={false}
-            accept=".pdf,.doc,.docx"
-          >
-            <Button type="primary" icon={<UploadOutlined />} loading={resumeUploading}>
-              上传简历
-            </Button>
-          </Upload>
-          <Upload
             beforeUpload={(file, fileList) => {
-              // 只在第一个文件时触发批量上传
+              // 只在第一个文件时触发一次上传，支持单个和批量
               if (fileList.indexOf(file) === 0) {
-                handleBatchResumeUpload(fileList as unknown as File[]);
+                if (fileList.length === 1) {
+                  handleResumeUpload(file);
+                } else {
+                  handleBatchResumeUpload(fileList as unknown as File[]);
+                }
               }
               return false;
             }}
             showUploadList={false}
             accept=".pdf,.doc,.docx"
             multiple
-            directory={false}
           >
-            <Button icon={<UploadOutlined />} loading={resumeUploading}>
-              批量上传
+            <Button type="primary" icon={<UploadOutlined />} loading={resumeUploading}>
+              上传简历
             </Button>
           </Upload>
           {selectedResumeIds.length > 0 && (
@@ -539,7 +585,7 @@ export default function PositionDetail() {
       ) : resumeList.length === 0 ? (
         <div style={{ textAlign: 'center', color: '#999', padding: 60 }}>
           <FilePdfOutlined style={{ fontSize: 48, marginBottom: 16, display: 'block' }} />
-          暂无简历，点击上方按钮上传
+          暂无简历，直接将简历文件拖入本页面，或点击上方按钮上传
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: 16 }}>
@@ -714,6 +760,7 @@ export default function PositionDetail() {
                 <Descriptions.Item label="职级分布">{position.levelDistribution || '-'}</Descriptions.Item>
                 <Descriptions.Item label="薪资范围">{position.salaryRange || '面议'}</Descriptions.Item>
                 <Descriptions.Item label="地区">{position.region || '-'}</Descriptions.Item>
+                <Descriptions.Item label="服务地点">{position.serviceLocation || '-'}</Descriptions.Item>
                 <Descriptions.Item label="交付形式">{position.deliveryForm || '-'}</Descriptions.Item>
                 <Descriptions.Item label="紧急程度">
                   {({ low: '低', medium: '中', high: '高', critical: '紧急' } as any)[position.urgency] || position.urgency}
@@ -731,6 +778,60 @@ export default function PositionDetail() {
                 <Descriptions.Item label="岗位实施" span={2}>{position.positionImplementation || '暂无'}</Descriptions.Item>
                 <Descriptions.Item label="创建者">{position.creator?.name || position.creator?.username || '-'}</Descriptions.Item>
               </Descriptions>
+
+              {/* 简历筛选模型 */}
+              <Divider orientation="left" style={{ marginTop: 16 }}>简历筛选模型</Divider>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                {position.screeningModelUrl ? (
+                  <>
+                    <Tag color="green" icon={<CheckCircleOutlined />}>已上传筛选模型</Tag>
+                    <a href={position.screeningModelUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 12 }}>查看文件</a>
+                    {isCreator && (
+                      <Popconfirm
+                        title="确定删除简历筛选模型？"
+                        onConfirm={async () => {
+                          try {
+                            await request.delete(`/positions/${id}/screening-model`);
+                            message.success('删除成功');
+                            loadData();
+                          } catch (err: any) {
+                            message.error(err?.response?.data?.message || '删除失败');
+                          }
+                        }}
+                      >
+                        <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+                      </Popconfirm>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: '#999', fontSize: 13 }}>未上传筛选模型</span>
+                    {isCreator && (
+                      <Upload
+                        beforeUpload={async (file) => {
+                          const formData = new FormData();
+                          formData.append('file', file);
+                          try {
+                            await request.post(`/positions/${id}/screening-model`, formData, {
+                              headers: { 'Content-Type': 'multipart/form-data' },
+                            });
+                            message.success('筛选模型上传成功');
+                            loadData();
+                          } catch (err: any) {
+                            message.error(err?.response?.data?.message || '上传失败');
+                          }
+                          return false;
+                        }}
+                        showUploadList={false}
+                        accept=".txt,.md,.doc,.docx,.pdf,.json"
+                      >
+                        <Button size="small" icon={<UploadOutlined />}>上传筛选模型</Button>
+                      </Upload>
+                    )}
+                  </>
+                )}
+                <span style={{ color: '#aaa', fontSize: 12 }}>AI分析简历时将依据此模型进行筛选</span>
+              </div>
             </Card>
 
             <Card
@@ -1104,6 +1205,9 @@ export default function PositionDetail() {
               </Form.Item>
             </Col>
           </Row>
+          <Form.Item name="serviceLocation" label="服务地点">
+            <Input placeholder="请输入服务地点（办公地点）" />
+          </Form.Item>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="urgency" label="紧急程度">
@@ -1128,8 +1232,22 @@ export default function PositionDetail() {
               </Form.Item>
             </Col>
             <Col span={12}>
-              <Form.Item name="positionImplementation" label="岗位实施">
-                <Input readOnly />
+              <Form.Item
+                name="positionImplementation"
+                label="岗位实施"
+                extra={isCreator ? '可将岗位实施转给其他用户' : undefined}
+              >
+                {isCreator ? (
+                  <Select
+                    placeholder="选择岗位实施用户"
+                    showSearch
+                    optionFilterProp="label"
+                    options={userOptions}
+                    allowClear={false}
+                  />
+                ) : (
+                  <Input readOnly />
+                )}
               </Form.Item>
             </Col>
           </Row>

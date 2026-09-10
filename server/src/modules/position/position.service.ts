@@ -171,8 +171,8 @@ export class PositionService {
     const entityColumns = [
       'systemName', 'department', 'requirementNumber', 'positionType', 'positionDuty',
       'techDomain', 'majorType', 'levelDistribution', 'salaryRange', 'requirements',
-      'responsibilities', 'domainExperience', 'region', 'deliveryForm',
-      'positionImplementation', 'urgency', 'requiredCount', 'hiredCount',
+      'responsibilities', 'domainExperience', 'region', 'serviceLocation', 'deliveryForm',
+      'positionImplementation', 'screeningModelUrl', 'urgency', 'requiredCount', 'hiredCount',
       'expectedDate', 'status', 'projectId', 'creatorId',
     ];
     const cleaned: any = {};
@@ -190,6 +190,11 @@ export class PositionService {
       }
     }
     cleaned.creatorId = userId;
+    // 岗位实施默认绑定为创建者用户
+    if (!cleaned.positionImplementation || !String(cleaned.positionImplementation).trim()) {
+      const creator = await this.userRepository.findOne({ where: { id: userId } });
+      cleaned.positionImplementation = creator?.name || creator?.username || '';
+    }
     console.log(`[Position] create: urgency=${cleaned.urgency}, status=${cleaned.status}, requirementNumber=${cleaned.requirementNumber}`);
     const position = this.positionRepository.create(cleaned) as unknown as Position;
     if (!validUrgency.includes(position.urgency)) {
@@ -224,8 +229,8 @@ export class PositionService {
     const entityColumns = [
       'systemName', 'department', 'requirementNumber', 'positionType', 'positionDuty',
       'techDomain', 'majorType', 'levelDistribution', 'salaryRange', 'requirements',
-      'responsibilities', 'domainExperience', 'region', 'deliveryForm',
-      'positionImplementation', 'urgency', 'requiredCount', 'hiredCount',
+      'responsibilities', 'domainExperience', 'region', 'serviceLocation', 'deliveryForm',
+      'positionImplementation', 'screeningModelUrl', 'urgency', 'requiredCount', 'hiredCount',
       'expectedDate', 'status', 'projectId', 'creatorId',
     ];
     const cleaned: any = {};
@@ -239,6 +244,7 @@ export class PositionService {
         }
       }
     }
+    const oldImplementation = position.positionImplementation;
     Object.assign(position, cleaned);
     if (!validUrgency.includes(position.urgency)) {
       position.urgency = 'medium' as any;
@@ -248,6 +254,16 @@ export class PositionService {
     }
     console.log(`[Position] update id=${id}: urgency=${position.urgency}, status=${position.status}`);
     const result = await this.positionRepository.save(position);
+
+    // 岗位实施变更时，同步更新该岗位下所有候选人关联记录的对接实施
+    if (cleaned.positionImplementation !== undefined && cleaned.positionImplementation !== oldImplementation) {
+      await this.candidatePositionRepository.update(
+        { positionId: id },
+        { implementation: cleaned.positionImplementation },
+      );
+      console.log(`[Position] update id=${id}: 同步更新候选人关联记录的对接实施为 "${cleaned.positionImplementation}"`);
+    }
+
     await this.logService.log(userId, 'update', 'position', id, cleaned);
     this.socketGateway.broadcastToAllUsers('position.updated', result);
     return result;
@@ -276,6 +292,13 @@ export class PositionService {
         }
         Object.assign(position, data);
         await this.positionRepository.save(position);
+        // 岗位实施变更时，同步更新该岗位下所有候选人关联记录的对接实施
+        if (data.positionImplementation !== undefined) {
+          await this.candidatePositionRepository.update(
+            { positionId: id },
+            { implementation: data.positionImplementation },
+          );
+        }
         success++;
       } catch {
         failed++;
@@ -673,7 +696,7 @@ export class PositionService {
       education: parsedInfo.education || '未提供',
       educationType: parsedInfo.educationType || '统招',
       domainYears: parsedInfo.yearsOfExperience ? Number(parsedInfo.yearsOfExperience) : null,
-      supplier: parsedInfo.currentCompany || '未提供',
+      supplier: '软通动力',
       workStatus: parsedInfo.workStatus || '未提供',
       expectedSalary: parsedInfo.expectedSalary || '未提供',
       idType: '身份证',
@@ -698,7 +721,7 @@ export class PositionService {
       pushDate: new Date(),
       recommender: uploaderName,
       recommenderId: userId,
-      recommendReason: '简历库上传',
+      recommendReason: '',
       implementation: positionWithImpl?.positionImplementation || '',
       resumeUrl: fileUrl,
     });
@@ -807,6 +830,60 @@ export class PositionService {
     }
 
     archive.finalize();
+  }
+
+  // 上传简历筛选模型文件
+  async uploadScreeningModel(positionId: number, file: Express.Multer.File) {
+    const position = await this.positionRepository.findOne({
+      where: { id: positionId },
+    });
+    if (!position) {
+      throw new NotFoundException('岗位不存在');
+    }
+
+    // 删除旧文件
+    if (position.screeningModelUrl) {
+      try {
+        const oldPath = path.join(__dirname, '..', '..', '..', position.screeningModelUrl.replace(/^\//, ''));
+        if (fs.existsSync(oldPath)) {
+          fs.unlinkSync(oldPath);
+        }
+      } catch (err) {
+        console.error('[Position] 删除旧筛选模型文件失败:', err?.message || err);
+      }
+    }
+
+    const url = `/uploads/models/${file.filename}`;
+    position.screeningModelUrl = url;
+    await this.positionRepository.save(position);
+
+    const originalName = Buffer.from(file.originalname || '未知文件', 'latin1').toString('utf-8');
+    return { url, fileName: originalName };
+  }
+
+  // 删除简历筛选模型文件
+  async removeScreeningModel(positionId: number) {
+    const position = await this.positionRepository.findOne({
+      where: { id: positionId },
+    });
+    if (!position) {
+      throw new NotFoundException('岗位不存在');
+    }
+
+    if (position.screeningModelUrl) {
+      try {
+        const filePath = path.join(__dirname, '..', '..', '..', position.screeningModelUrl.replace(/^\//, ''));
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+      } catch (err) {
+        console.error('[Position] 删除筛选模型文件失败:', err?.message || err);
+      }
+    }
+
+    position.screeningModelUrl = null;
+    await this.positionRepository.save(position);
+    return { message: '删除成功' };
   }
 
   async getDashboardStats(projectId?: number) {

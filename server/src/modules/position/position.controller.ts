@@ -173,6 +173,33 @@ export class PositionController {
     return this.positionService.exportResumes(id, body.candidateIds || [], res);
   }
 
+  @Post(':id/screening-model')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: diskStorage({
+      destination: join(__dirname, '..', '..', '..', 'uploads', 'models'),
+      filename: (_req, file, cb) => {
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+        const ext = file.originalname.split('.').pop();
+        cb(null, uniqueSuffix + '.' + ext);
+      },
+    }),
+    limits: { fileSize: 50 * 1024 * 1024 },
+  }))
+  async uploadScreeningModel(
+    @Param('id', ParseIntPipe) id: number,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) return { code: 1, message: '请选择文件' };
+    return this.positionService.uploadScreeningModel(id, file);
+  }
+
+  @Delete(':id/screening-model')
+  async removeScreeningModel(
+    @Param('id', ParseIntPipe) id: number,
+  ) {
+    return this.positionService.removeScreeningModel(id);
+  }
+
   @Get(':id')
   async findOne(@Param('id', ParseIntPipe) id: number) {
     return this.positionService.findOne(id);

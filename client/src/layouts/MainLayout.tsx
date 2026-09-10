@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
-import { Layout, Menu, Dropdown, Avatar, Breadcrumb, theme, Badge, Popover, List, Button, Modal, Form, Input, Tag, message, Popconfirm } from 'antd';
+import { Layout, Menu, Dropdown, Avatar, Breadcrumb, theme, Badge, Popover, List, Button, Modal, Form, Input, Tag, message, Popconfirm, Space } from 'antd';
 import {
   DashboardOutlined,
   ProjectOutlined,
@@ -23,6 +23,14 @@ import { useUserStore } from '../stores/user';
 import { getNotices, createNotice, deleteNotice } from '../api/notice';
 import { on, off } from '../socket';
 import { playMessageSound, isSoundEnabled } from '../utils/notification-sound';
+import {
+  notifyMessage,
+  requestDesktopPermission,
+  isDesktopNotifySupported,
+  isSecureContextAvailable,
+  isSystemNotificationUsable,
+  getDesktopPermission,
+} from '../utils/desktop-notification';
 import ErrorBoundary from '../components/ErrorBoundary';
 
 const { Header, Sider, Content } = Layout;
@@ -70,6 +78,9 @@ export default function MainLayout() {
   const lastNoticeCountRef = useRef(0);
   const isAdmin = user?.role === 'admin';
 
+  // 桌面通知权限状态（setter用于授权后触发重渲染，实际状态实时读取）
+  const [, setDesktopPermission] = useState<string>(getDesktopPermission());
+
   const loadNotices = async () => {
     try {
       setNoticeLoading(true);
@@ -88,6 +99,16 @@ export default function MainLayout() {
       // 检测是否有新公告
       if (lastNoticeCountRef.current > 0 && data.length > lastNoticeCountRef.current) {
         setHasNewNotice(true);
+        // 弹窗提醒新公告（系统弹窗或页面内弹窗）
+        const latest = data[0];
+        if (latest) {
+          notifyMessage(
+            `新公告：${latest.title || '系统通知'}`,
+            latest.content ? String(latest.content).substring(0, 60) : '点击查看详情',
+            () => navigate('/message-board'),
+            '新公告',
+          );
+        }
       }
       lastNoticeCountRef.current = data.length;
     } catch (err) {
@@ -106,14 +127,22 @@ export default function MainLayout() {
     }
   }, [user?.id]);
 
-  // 全局讨论组消息提示音
+  // 全局讨论组消息：提示音 + 弹窗提醒
   useEffect(() => {
     const handler = (data: { groupId: number; message: any }) => {
-      // 不播放自己发送的消息
+      // 忽略自己发送的消息
       if (data.message?.senderId === user?.id) return;
       if (isSoundEnabled()) {
         playMessageSound();
       }
+      // 弹窗提醒（系统弹窗或页面内弹窗）
+      const senderName = data.message?.senderName || data.message?.sender?.name || '新消息';
+      const content = data.message?.content ? String(data.message.content).substring(0, 60) : '';
+      notifyMessage(
+        `${senderName} 在讨论组发来消息`,
+        content || '点击查看详情',
+        () => navigate('/discussions'),
+      );
     };
     on('discussion.message', handler);
     return () => off('discussion.message', handler);
@@ -155,12 +184,41 @@ export default function MainLayout() {
     <div style={{ width: 360, maxHeight: 480, overflowY: 'auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
         <span style={{ fontWeight: 600, fontSize: 15 }}>通知公告</span>
-        {isAdmin && (
-          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setNoticeModalOpen(true); }}>
-            发布
-          </Button>
-        )}
+        <Space size={4}>
+          {isDesktopNotifySupported() && isSecureContextAvailable() && !isSystemNotificationUsable() && (
+            <Button
+              size="small"
+              onClick={async () => {
+                const perm = await requestDesktopPermission();
+                setDesktopPermission(perm);
+                if (perm === 'granted') {
+                  message.success('系统桌面弹窗已开启');
+                } else if (perm === 'denied') {
+                  message.warning('浏览器已拒绝桌面通知，请在浏览器地址栏站点设置中允许');
+                }
+              }}
+            >
+              开启系统弹窗
+            </Button>
+          )}
+          {isAdmin && (
+            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setNoticeModalOpen(true); }}>
+              发布
+            </Button>
+          )}
+        </Space>
       </div>
+      {isSystemNotificationUsable() ? (
+        <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>
+          系统桌面弹窗已开启（新消息/新公告时弹出系统通知）
+        </div>
+      ) : (
+        <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>
+          {isSecureContextAvailable()
+            ? '可开启系统桌面弹窗：新消息/新公告时在屏幕右下角弹出系统通知'
+            : '当前为HTTP访问，浏览器不提供系统弹窗权限；已自动启用页面内右下角弹窗 + 标签页标题闪烁提醒（配置HTTPS域名后可升级为系统桌面弹窗）'}
+        </div>
+      )}
       <List
         loading={noticeLoading}
         dataSource={notices}

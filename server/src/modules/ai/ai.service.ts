@@ -132,7 +132,6 @@ export class AiService {
 - email: 邮箱
 - gender: 性别（男/女）
 - yearsOfExperience: 工作年限（数字）
-- currentCompany: 当前公司/供应商
 - skills: 技能列表(数组)
 - education: 学历（如：本科、硕士、大专）
 - educationType: 学历类型（如：统招、自考、成教）
@@ -169,7 +168,7 @@ ${fileContent}`;
     candidate: Candidate,
     position: Position,
     userId: number,
-  ): Promise<{ score: number; detail: any }> {
+  ): Promise<{ score: number; recommendReason: string; detail: any }> {
     const { client, model } = await this.getClient(userId);
 
     // 如果候选人只有id（从controller传入的裸对象），从数据库加载完整实体
@@ -185,6 +184,31 @@ ${fileContent}`;
       const fullPosition = await this.positionRepository.findOne({ where: { id: position.id } });
       if (fullPosition) {
         position = fullPosition;
+      }
+    }
+
+    // 读取岗位的简历筛选模型文件
+    let screeningModelContent = '';
+    if (position.screeningModelUrl) {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const modelPath = path.join(__dirname, '..', '..', '..', position.screeningModelUrl.replace(/^\//, ''));
+        if (fs.existsSync(modelPath)) {
+          const ext = position.screeningModelUrl.split('.').pop()?.toLowerCase();
+          if (ext === 'pdf') {
+            const pdfParse = require('pdf-parse');
+            const dataBuffer = fs.readFileSync(modelPath);
+            const pdfData = await pdfParse(dataBuffer);
+            screeningModelContent = pdfData.text || '';
+          } else if (ext === 'docx' || ext === 'doc') {
+            screeningModelContent = `[Word筛选模型文件已上传，路径: ${position.screeningModelUrl}]`;
+          } else {
+            screeningModelContent = fs.readFileSync(modelPath, 'utf-8').substring(0, 10000);
+          }
+        }
+      } catch (err) {
+        console.error('[AI] 读取筛选模型文件失败:', err?.message || err);
       }
     }
 
@@ -259,7 +283,12 @@ ${fileContent}`;
 
     const prompt = `你是一名资深技术招聘专家，请对以下候选人与岗位进行深度匹配分析。
 
-请按以下步骤逐步分析（Chain-of-Thought）：
+${screeningModelContent ? `**重要：该岗位已上传简历筛选模型，请严格按照筛选模型的要求和标准进行筛选分析。**
+
+简历筛选模型内容：
+${screeningModelContent}
+
+` : ''}请按以下步骤逐步分析（Chain-of-Thought）：
 
 第一步：提取岗位核心要求
 - 从岗位任职要求和岗位职责中提取必须技能（Must-have）和加分技能（Nice-to-have）
@@ -281,6 +310,7 @@ ${fileContent}`;
 请严格返回以下JSON格式（不要包含其他文字）：
 {
   "score": 匹配分数(0-100的整数，基于以下权重：技能匹配40%+经验匹配25%+学历匹配15%+领域匹配20%),
+  "recommendReason": "推荐理由（50-150字，基于岗位要求说明为何推荐该候选人，突出匹配的关键优势）",
   "detail": {
     "skillMatch": {
       "score": 技能匹配分(0-100),
@@ -333,11 +363,13 @@ ${positionInfo}`;
       const parsed = jsonMatch ? JSON.parse(jsonMatch[0]) : JSON.parse(content);
       return {
         score: parsed.score || 0,
+        recommendReason: parsed.recommendReason || '',
         detail: parsed.detail || {},
       };
     } catch {
       return {
         score: 0,
+        recommendReason: '',
         detail: { rawContent: content },
       };
     }
@@ -537,7 +569,7 @@ ${positions
 
     const prompt = `分析文件样本，识别是"岗位需求"还是"候选人推荐"，建立字段映射。
 
-岗位字段：systemName(系统), department(部门), requirementNumber(需求编号), positionType(岗位类型), positionDuty(岗位职务), techDomain(技术领域), majorType(专业类型), levelDistribution(职级分布), salaryRange(薪资范围), requirements(岗位要求), responsibilities(岗位职责), domainExperience(领域经验), region(地区), deliveryForm(交付形式), positionImplementation(岗位实施), urgency(紧急程度low/medium/high/critical), requiredCount(需求人数), expectedDate(期望到岗日期)
+岗位字段：systemName(系统), department(部门), requirementNumber(需求编号), positionType(岗位类型), positionDuty(岗位职务), techDomain(技术领域), majorType(专业类型), levelDistribution(职级分布), salaryRange(薪资范围), requirements(岗位要求), responsibilities(岗位职责), domainExperience(领域经验), region(地区), serviceLocation(服务地点/办公地点), deliveryForm(交付形式), positionImplementation(岗位实施), urgency(紧急程度low/medium/high/critical), requiredCount(需求人数), expectedDate(期望到岗日期)
 
 候选人字段：name(姓名), gender(性别), idType(证件类型), idNumber(证件号码), contactPhone(联系电话), contactEmail(联系邮箱), areaCode(区号), supplier(供应商), educationType(学历类型), education(学历), graduationDate(毕业时间), domainYears(领域年限), workStatus(工作状态), expectedSalary(期望薪资), recommender(推荐人), recommendReason(推荐理由)
 
@@ -556,19 +588,19 @@ ${fileContent}`;
 
     let response;
     let lastErr: any;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        console.log(`[AI] analyzeFileForImport attempt ${attempt}/3`);
+        console.log(`[AI] analyzeFileForImport attempt ${attempt}/2`);
         response = await client.chat.completions.create({
           model,
           messages: [{ role: 'user', content: prompt }],
           temperature: 0.2,
-        }, { timeout: 120000 });
+        }, { timeout: 90000 });
         break; // 成功则跳出
       } catch (apiErr: any) {
         lastErr = apiErr;
         console.error(`[AI] analyzeFileForImport attempt ${attempt} error:`, apiErr?.message || apiErr);
-        if (attempt < 3) {
+        if (attempt < 2) {
           await new Promise(r => setTimeout(r, 2000 * attempt)); // 递增等待
         }
       }

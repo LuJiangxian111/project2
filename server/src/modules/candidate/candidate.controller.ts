@@ -51,6 +51,23 @@ export class CandidateController {
     });
   }
 
+  @Get('list')
+  async findAllList(
+    @Query('keyword') keyword?: string,
+    @Query('projectId') projectId?: string,
+    @Query('positionId') positionId?: string,
+    @Query('status') status?: string,
+    @Query('recommenderId') recommenderId?: string,
+  ) {
+    return this.candidateService.findAllFlatList({
+      keyword,
+      projectId: projectId ? Number(projectId) : undefined,
+      positionId: positionId ? Number(positionId) : undefined,
+      status,
+      recommenderId: recommenderId ? Number(recommenderId) : undefined,
+    });
+  }
+
   @Post('upload-resume')
   @UseInterceptors(FileInterceptor('file', {
     storage: diskStorage({

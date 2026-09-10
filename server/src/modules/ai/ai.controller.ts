@@ -317,6 +317,7 @@ export class AiController {
       if (cp) {
         cp.matchScore = result.score;
         cp.matchDetail = JSON.stringify(result.detail);
+        if (result.recommendReason) cp.recommendReason = result.recommendReason;
         await this.candidatePositionRepository.save(cp);
       }
     } catch (err) {

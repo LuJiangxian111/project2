@@ -56,11 +56,17 @@ export class Position {
   @Column({ length: 100 })
   region: string;
 
+  @Column({ name: 'service_location', length: 200, nullable: true })
+  serviceLocation: string;
+
   @Column({ name: 'delivery_form', length: 100 })
   deliveryForm: string;
 
   @Column({ name: 'position_implementation', type: 'text', nullable: true })
   positionImplementation: string;
+
+  @Column({ name: 'screening_model_url', nullable: true })
+  screeningModelUrl: string;
 
   @Column({ type: 'simple-enum', enum: ['low', 'medium', 'high', 'critical'], default: 'medium' })
   urgency: 'low' | 'medium' | 'high' | 'critical';

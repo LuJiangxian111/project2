@@ -7,14 +7,14 @@ export const chatWithFile = (file: File, messages: { role: string; content: stri
   const formData = new FormData();
   formData.append('file', file);
   formData.append('messages', JSON.stringify(messages));
-  return request.post('/ai/chat-with-file', formData, { timeout: 180000 });
+  return request.post('/ai/chat-with-file', formData, { timeout: 360000 });
 };
 
 export const analyzeFile = (file: File, instruction?: string) => {
   const formData = new FormData();
   formData.append('file', file);
   if (instruction) formData.append('instruction', instruction);
-  return request.post('/ai/analyze-file', formData, { timeout: 180000 });
+  return request.post('/ai/analyze-file', formData, { timeout: 360000 });
 };
 
 export const parseResume = (file: File) => {
@@ -39,7 +39,7 @@ export const agentChatWithFiles = (files: File[], messages: { role: string; cont
   const formData = new FormData();
   files.forEach(file => formData.append('files', file));
   formData.append('messages', JSON.stringify(messages));
-  return request.post('/ai/agent-chat-with-file', formData, { timeout: 180000 });
+  return request.post('/ai/agent-chat-with-file', formData, { timeout: 360000 });
 };
 
 export const agentChatWithFile = (file: File, messages: { role: string; content: string }[]) => {

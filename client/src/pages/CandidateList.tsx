@@ -1,19 +1,20 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
-  Table, Input, Button, Space, Tag, Select, Badge, Modal, Checkbox, Descriptions, Divider, Spin, message, Form, DatePicker,
+  Table, Input, Button, Space, Tag, Select, Badge, Modal, Checkbox, Descriptions, Divider, Spin, message, Form, DatePicker, Segmented, Tooltip, Steps,
 } from 'antd';
 import {
   SearchOutlined, UserOutlined, DownOutlined, RightOutlined, ExportOutlined,
-  ArrowUpOutlined, ArrowDownOutlined,
+  ArrowUpOutlined, ArrowDownOutlined, FilePdfOutlined,
 } from '@ant-design/icons';
 import * as XLSX from 'xlsx';
 import {
-  getCandidatesGrouped, updateCandidatePositionStatus, getCandidate,
+  getCandidatesGrouped, getCandidatesList, updateCandidatePositionStatus, getCandidate,
 } from '../api/candidate';
 import { createInterview } from '../api/interview';
 import { getPositions } from '../api/position';
 import { getProjects } from '../api/project';
 import StatusTag from '../components/StatusTag';
+import MatchScoreTag from '../components/MatchScoreTag';
 
 const STATUS_MAP: Record<string, { label: string; color: string }> = {
   pending_screen: { label: '待筛选', color: 'default' },
@@ -103,12 +104,175 @@ function getFieldValue(group: any, pos: any, field: ExportField, idx: number): a
 
 export default function CandidateList() {
   const [groups, setGroups] = useState<any[]>([]);
+  const [flatList, setFlatList] = useState<any[]>([]);
+  const [viewMode, setViewMode] = useState<'grouped' | 'list'>('list');
   const [loading, setLoading] = useState(false);
   const [keyword, setKeyword] = useState('');
   const [filterProjectId, setFilterProjectId] = useState<number | undefined>();
   const [filterPositionId, setFilterPositionId] = useState<number | undefined>();
   const [filterStatus, setFilterStatus] = useState<string | undefined>();
   const [projects, setProjects] = useState<any[]>([]);
+
+  // 列表视图：列顺序和筛选（仅本地，仅自己可见）
+  const LIST_COL_ORDER_KEY = 'candidate_list_col_order';
+  const LIST_FILTERS_KEY = 'candidate_list_filters';
+  const DEFAULT_COL_ORDER = ['recommender', 'pushDate', 'projectPosition', 'department', 'candidateName', 'resumeUrl', 'matchScore', 'status', 'recommendReason', 'implementation', 'remark'];
+  const [listColOrder, setListColOrder] = useState<string[]>(() => {
+    try { const s = localStorage.getItem(LIST_COL_ORDER_KEY); if (s) return JSON.parse(s); } catch {}
+    return DEFAULT_COL_ORDER;
+  });
+  const [listFilters, setListFilters] = useState<Record<string, string[]>>(() => {
+    try {
+      const s = localStorage.getItem(LIST_FILTERS_KEY);
+      if (s) {
+        const parsed = JSON.parse(s);
+        // 兼容旧格式：仅保留数组类型的筛选值
+        const valid: Record<string, string[]> = {};
+        Object.entries(parsed).forEach(([k, v]) => { if (Array.isArray(v) && v.length) valid[k] = v; });
+        return valid;
+      }
+    } catch {}
+    return {};
+  });
+
+  const saveColOrder = (order: string[]) => { setListColOrder(order); localStorage.setItem(LIST_COL_ORDER_KEY, JSON.stringify(order)); };
+  const saveFilters = (filters: Record<string, string[]>) => {
+    setListFilters(filters);
+    localStorage.setItem(LIST_FILTERS_KEY, JSON.stringify(filters));
+  };
+
+  // 拖拽排序辅助函数
+  const dragColKey = useRef<string | null>(null);
+  const dragOverColKey = useRef<string | null>(null);
+  const makeDraggableHeader = (colKey: string) => ({
+    colKey,
+    draggable: true,
+    onDragStart: () => { dragColKey.current = colKey; },
+    onDragOver: (e: any) => { e.preventDefault(); dragOverColKey.current = colKey; },
+    onDrop: () => {
+      const from = dragColKey.current;
+      const to = dragOverColKey.current;
+      if (from && to && from !== to) {
+        const newOrder = [...listColOrder];
+        const fromIdx = newOrder.indexOf(from);
+        const toIdx = newOrder.indexOf(to);
+        if (fromIdx >= 0 && toIdx >= 0) {
+          newOrder.splice(fromIdx, 1);
+          newOrder.splice(toIdx, 0, from);
+          saveColOrder(newOrder);
+        }
+      }
+      dragColKey.current = null;
+      dragOverColKey.current = null;
+    },
+    style: { cursor: 'move' },
+  } as any);
+
+  // 列表视图：各列取显示值（用于生成筛选选项和匹配）
+  const colValueGetters: Record<string, (r: any) => string> = {
+    recommender: (r) => r.recommender || '(空)',
+    pushDate: (r) => (r.pushDate ? r.pushDate.substring(0, 10) : (r.recommendedAt ? r.recommendedAt.substring(0, 10) : '(空)')),
+    projectPosition: (r) => (r.projectName && r.positionDuty ? `${r.projectName} / ${r.positionDuty}` : (r.projectName || r.positionDuty || '(空)')),
+    department: (r) => r.department || '(空)',
+    candidateName: (r) => r.candidateName || '(空)',
+    status: (r) => STATUS_MAP[r.status]?.label || r.status || '(空)',
+    recommendReason: (r) => r.recommendReason || '(空)',
+    implementation: (r) => r.implementation || '(空)',
+  };
+
+  // 从当前数据提取某列的不重复值，生成筛选选项
+  const getFilterOptions = (colKey: string) => {
+    const getter = colValueGetters[colKey];
+    if (!getter) return [];
+    const unique = Array.from(new Set(flatList.map(getter)));
+    return unique.map((v) => ({ text: v, value: v }));
+  };
+
+  // 列表视图：按勾选值筛选数据（多列为"且"关系，列内为"或"关系）
+  const filteredFlatList = flatList.filter((item: any) => {
+    for (const [key, selected] of Object.entries(listFilters)) {
+      if (!selected || !selected.length) continue;
+      const getter = colValueGetters[key];
+      if (!getter) continue;
+      if (!selected.includes(getter(item))) return false;
+    }
+    return true;
+  });
+
+  // 生成带筛选和拖拽的列
+  const buildListColumns = () => {
+    const allCols: any[] = [
+      { title: '上传招聘', key: 'recommender', width: 100, fixed: 'left' as const,
+        render: (_: any, record: any) => (
+          <a onClick={() => { setRecommenderName(record.recommender || '未知'); setRecommenderModalOpen(true); const filtered = flatList.filter((item: any) => item.recommender === record.recommender); setRecommenderList(filtered); }}>
+            {record.recommender || '-'}
+          </a>
+        ),
+        onHeaderCell: () => makeDraggableHeader('recommender'),
+      },
+      { title: '推荐日期', key: 'pushDate', width: 110,
+        render: (_: any, record: any) => record.pushDate ? record.pushDate.substring(0, 10) : (record.recommendedAt ? record.recommendedAt.substring(0, 10) : '-'),
+        onHeaderCell: () => makeDraggableHeader('pushDate'),
+      },
+      { title: '推荐项目及岗位', key: 'projectPosition', width: 200,
+        render: (_: any, record: any) => (<div><div style={{ fontWeight: 500 }}>{record.projectName || '-'}</div><div style={{ color: '#666', fontSize: 12 }}>{record.positionDuty || '-'}</div></div>),
+        onHeaderCell: () => makeDraggableHeader('projectPosition'),
+      },
+      { title: '岗位部门', dataIndex: 'department', key: 'department', width: 120, ellipsis: true,
+        render: (v: string) => v || '-',
+        onHeaderCell: () => makeDraggableHeader('department'),
+      },
+      { title: '姓名', key: 'candidateName', width: 100,
+        render: (_: any, record: any) => (<a onClick={() => handleViewCandidate(record.candidateId)}>{record.candidateName}</a>),
+        onHeaderCell: () => makeDraggableHeader('candidateName'),
+      },
+      { title: '简历', key: 'resumeUrl', width: 70,
+        render: (_: any, record: any) => record.resumeUrl ? (<a href={record.resumeUrl} target="_blank" rel="noopener noreferrer"><FilePdfOutlined style={{ fontSize: 18, color: '#1890ff' }} /></a>) : '-',
+        onHeaderCell: () => makeDraggableHeader('resumeUrl'),
+      },
+      { title: '分数', key: 'matchScore', width: 80,
+        render: (_: any, record: any) => record.matchScore > 0 ? <MatchScoreTag score={record.matchScore} /> : '-',
+        onHeaderCell: () => makeDraggableHeader('matchScore'),
+      },
+      { title: '状态', key: 'status', width: 120,
+        render: (_: any, record: any) => (<Select value={record.status} onChange={(v) => handleStatusChange(record.cpId, v)} style={{ width: 120 }} size="small" options={STATUS_OPTIONS} />),
+        onHeaderCell: () => makeDraggableHeader('status'),
+      },
+      { title: '推荐理由', dataIndex: 'recommendReason', key: 'recommendReason', width: 200, ellipsis: true,
+        render: (v: string) => v ? <Tooltip title={v}>{v}</Tooltip> : '-',
+        onHeaderCell: () => makeDraggableHeader('recommendReason'),
+      },
+      { title: '对接实施', dataIndex: 'implementation', key: 'implementation', width: 100, ellipsis: true,
+        render: (v: string) => v || '-',
+        onHeaderCell: () => makeDraggableHeader('implementation'),
+      },
+      { title: '备注', key: 'remark', width: 100,
+        render: () => '-',
+        onHeaderCell: () => makeDraggableHeader('remark'),
+      },
+    ];
+    // 为可筛选列添加Excel风格筛选（下拉勾选 + 搜索）
+    const filterableKeys = ['recommender', 'pushDate', 'projectPosition', 'department', 'candidateName', 'status', 'recommendReason', 'implementation'];
+    allCols.forEach((col) => {
+      if (filterableKeys.includes(col.key)) {
+        col.filters = getFilterOptions(col.key);
+        col.filterSearch = true;
+        col.filterMultiple = true;
+        col.filteredValue = listFilters[col.key] || null;
+        col.onFilter = (value: any, record: any) => colValueGetters[col.key](record) === value;
+        col.filterIcon = (filtered: boolean) => <SearchOutlined style={{ color: filtered ? '#1890ff' : undefined }} />;
+      }
+    });
+    // 按保存的顺序排列列
+    const ordered = allCols.sort((a, b) => {
+      const ai = listColOrder.indexOf(a.key);
+      const bi = listColOrder.indexOf(b.key);
+      return (ai >= 0 ? ai : 999) - (bi >= 0 ? bi : 999);
+    });
+    return ordered;
+  };
+
+  const listColumns = buildListColumns();
   const [positions, setPositions] = useState<any[]>([]);
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
 
@@ -122,6 +286,11 @@ export default function CandidateList() {
   const [interviewForm] = Form.useForm();
   const [interviewLoading, setInterviewLoading] = useState(false);
   const [interviewCpId, setInterviewCpId] = useState<number>(0);
+
+  // 推荐人筛选弹窗
+  const [recommenderModalOpen, setRecommenderModalOpen] = useState(false);
+  const [recommenderName, setRecommenderName] = useState('');
+  const [recommenderList, setRecommenderList] = useState<any[]>([]);
 
   const handleViewCandidate = async (candidateId: number) => {
     try {
@@ -141,8 +310,33 @@ export default function CandidateList() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportFields, setExportFields] = useState<ExportField[]>([]);
   const [checkedKeys, setCheckedKeys] = useState<string[]>([]);
+  const [exportStep, setExportStep] = useState(0); // 0=选择字段 1=选择候选人
+  const [exportSelectedCandidates, setExportSelectedCandidates] = useState<string[]>([]); // 勾选的分组key
+  const [exportFilterRecommender, setExportFilterRecommender] = useState<string | undefined>();
+  const [exportFilterDate, setExportFilterDate] = useState<string | undefined>();
+  const [exportFilterPosition, setExportFilterPosition] = useState<string | undefined>();
   const dragItem = useRef<number | null>(null);
   const dragOverItem = useRef<number | null>(null);
+
+  // 分组唯一key（与表格rowKey一致）
+  const groupKey = (g: any) => `${g.name}_${g.contactPhone || g.phone}`;
+
+  // 导出第二步：按推荐人/推荐时间/岗位筛选后的分组
+  const getExportFilteredGroups = () => groups.filter((g: any) => {
+    if (exportFilterRecommender) {
+      const has = (g.positions || []).some((p: any) => p.recommender === exportFilterRecommender);
+      if (!has) return false;
+    }
+    if (exportFilterDate) {
+      const has = (g.positions || []).some((p: any) => p.pushDate?.substring?.(0, 10) === exportFilterDate);
+      if (!has) return false;
+    }
+    if (exportFilterPosition) {
+      const has = (g.positions || []).some((p: any) => p.positionTitle === exportFilterPosition);
+      if (!has) return false;
+    }
+    return true;
+  });
 
   // 导出简历弹窗状态
   const [resumeExportOpen, setResumeExportOpen] = useState(false);
@@ -166,19 +360,29 @@ export default function CandidateList() {
   const loadData = useCallback(async () => {
     try {
       setLoading(true);
-      const res: any = await getCandidatesGrouped({
-        keyword: keyword || undefined,
-        projectId: filterProjectId,
-        positionId: filterPositionId,
-        status: filterStatus,
-      });
-      setGroups(res.data || res || []);
+      if (viewMode === 'grouped') {
+        const res: any = await getCandidatesGrouped({
+          keyword: keyword || undefined,
+          projectId: filterProjectId,
+          positionId: filterPositionId,
+          status: filterStatus,
+        });
+        setGroups(res.data || res || []);
+      } else {
+        const res: any = await getCandidatesList({
+          keyword: keyword || undefined,
+          projectId: filterProjectId,
+          positionId: filterPositionId,
+          status: filterStatus,
+        });
+        setFlatList(res.data || res || []);
+      }
     } catch (err) {
       console.error(err);
     } finally {
       setLoading(false);
     }
-  }, [keyword, filterProjectId, filterPositionId, filterStatus]);
+  }, [viewMode, keyword, filterProjectId, filterPositionId, filterStatus]);
 
   useEffect(() => {
     loadData();
@@ -258,8 +462,11 @@ export default function CandidateList() {
     const activeFields = exportFields.filter((f) => checkedKeys.includes(f.key));
     if (activeFields.length === 0) return;
 
+    // 仅导出勾选的候选人
+    const selectedGroups = groups.filter((g: any) => exportSelectedCandidates.includes(groupKey(g)));
+
     const rows: Record<string, any>[] = [];
-    groups.forEach((group: any) => {
+    selectedGroups.forEach((group: any) => {
       group.positions.forEach((pos: any, idx: number) => {
         const row: Record<string, any> = {};
         activeFields.forEach((field) => {
@@ -418,6 +625,14 @@ export default function CandidateList() {
     <div>
       {/* 筛选栏 */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <Segmented
+          value={viewMode}
+          onChange={(v) => setViewMode(v as 'grouped' | 'list')}
+          options={[
+            { label: '列表视图', value: 'list' },
+            { label: '分组视图', value: 'grouped' },
+          ]}
+        />
         <Input
           placeholder="搜索姓名/电话/证件号"
           prefix={<SearchOutlined />}
@@ -453,7 +668,7 @@ export default function CandidateList() {
         <Button onClick={() => { setKeyword(''); setFilterProjectId(undefined); setFilterPositionId(undefined); setFilterStatus(undefined); }}>
           重置筛选
         </Button>
-        <Button type="primary" icon={<ExportOutlined />} onClick={() => setExportModalOpen(true)} disabled={groups.length === 0}>
+        <Button type="primary" icon={<ExportOutlined />} onClick={() => { setExportStep(0); setExportSelectedCandidates(groups.map(groupKey)); setExportModalOpen(true); }} disabled={groups.length === 0}>
           导出Excel
         </Button>
         <Button icon={<ExportOutlined />} onClick={handleExportCSV} disabled={groups.length === 0}>
@@ -544,15 +759,33 @@ export default function CandidateList() {
         title="导出候选人数据"
         open={exportModalOpen}
         onCancel={() => setExportModalOpen(false)}
-        width={520}
+        width={560}
         footer={[
           <Button key="cancel" onClick={() => setExportModalOpen(false)}>取消</Button>,
-          <Button key="reset" onClick={() => { setExportFields(DEFAULT_EXPORT_FIELDS); setCheckedKeys(DEFAULT_EXPORT_FIELDS.map((f) => f.key)); }}>恢复默认</Button>,
-          <Button key="export" type="primary" onClick={handleConfirmExport} disabled={checkedKeys.length === 0}>
-            确认导出
-          </Button>,
+          ...(exportStep === 0
+            ? [
+                <Button key="reset" onClick={() => { setExportFields(DEFAULT_EXPORT_FIELDS); setCheckedKeys(DEFAULT_EXPORT_FIELDS.map((f) => f.key)); }}>恢复默认</Button>,
+                <Button key="next" type="primary" onClick={() => setExportStep(1)} disabled={checkedKeys.length === 0}>
+                  下一步：选择候选人
+                </Button>,
+              ]
+            : [
+                <Button key="prev" onClick={() => setExportStep(0)}>上一步</Button>,
+                <Button key="export" type="primary" onClick={handleConfirmExport} disabled={exportSelectedCandidates.length === 0}>
+                  确认导出 ({exportSelectedCandidates.length} 人)
+                </Button>,
+              ]),
         ]}
       >
+        <Steps
+          size="small"
+          current={exportStep}
+          items={[{ title: '选择字段' }, { title: '选择候选人' }]}
+          style={{ marginBottom: 16 }}
+        />
+
+        {exportStep === 0 && (
+        <>
         <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
           拖拽或使用箭头调整字段顺序，勾选需要导出的字段。调整后的顺序将自动保存。
         </div>
@@ -617,9 +850,135 @@ export default function CandidateList() {
             </div>
           ))}
         </div>
+        </>
+        )}
+
+        {exportStep === 1 && (
+        <>
+        <div style={{ marginBottom: 8, color: '#888', fontSize: 13 }}>
+          勾选要导出的候选人（默认全选），可按推荐人、推荐时间、岗位筛选后勾选。确认后仅导出勾选的候选人数据。
+        </div>
+        {/* 筛选栏 */}
+        <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
+          <Select
+            placeholder="按推荐人筛选"
+            value={exportFilterRecommender}
+            onChange={setExportFilterRecommender}
+            allowClear
+            style={{ width: 140 }}
+            options={Array.from(new Set(groups.flatMap((g: any) => (g.positions || []).map((p: any) => p.recommender).filter(Boolean)))).map((v) => ({ value: v, label: v }))}
+          />
+          <Select
+            placeholder="按推荐时间筛选"
+            value={exportFilterDate}
+            onChange={setExportFilterDate}
+            allowClear
+            style={{ width: 140 }}
+            options={Array.from(new Set(groups.flatMap((g: any) => (g.positions || []).map((p: any) => p.pushDate?.substring?.(0, 10)).filter(Boolean)))).sort().reverse().map((v) => ({ value: v, label: v }))}
+          />
+          <Select
+            placeholder="按岗位筛选"
+            value={exportFilterPosition}
+            onChange={setExportFilterPosition}
+            allowClear
+            showSearch
+            optionFilterProp="label"
+            style={{ width: 180 }}
+            options={Array.from(new Set(groups.flatMap((g: any) => (g.positions || []).map((p: any) => p.positionTitle).filter(Boolean)))).map((v) => ({ value: v, label: v }))}
+          />
+          <Button
+            size="small"
+            onClick={() => {
+              // 勾选当前筛选结果
+              const filteredKeys = getExportFilteredGroups().map(groupKey);
+              setExportSelectedCandidates(Array.from(new Set([...exportSelectedCandidates, ...filteredKeys])));
+            }}
+          >
+            勾选当前筛选结果
+          </Button>
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <Checkbox
+            checked={exportSelectedCandidates.length === groups.length && groups.length > 0}
+            indeterminate={exportSelectedCandidates.length > 0 && exportSelectedCandidates.length < groups.length}
+            onChange={(e) => setExportSelectedCandidates(e.target.checked ? groups.map(groupKey) : [])}
+          >
+            全选 ({groups.length} 人)
+          </Checkbox>
+          <span style={{ color: '#888', marginLeft: 12, fontSize: 12 }}>
+            当前筛选 {getExportFilteredGroups().length} 人，已勾选 {exportSelectedCandidates.length} 人
+          </span>
+        </div>
+        <div style={{ maxHeight: 380, overflowY: 'auto', border: '1px solid #f0f0f0', borderRadius: 6 }}>
+          {getExportFilteredGroups().map((g: any) => {
+            const key = groupKey(g);
+            const checked = exportSelectedCandidates.includes(key);
+            const firstPos = g.positions?.[0];
+            return (
+              <div key={key} style={{ padding: '6px 12px', borderBottom: '1px solid #f5f5f5', display: 'flex', alignItems: 'flex-start' }}>
+                <Checkbox
+                  checked={checked}
+                  onChange={(e) => {
+                    setExportSelectedCandidates(prev =>
+                      e.target.checked ? [...prev, key] : prev.filter((k) => k !== key)
+                    );
+                  }}
+                >
+                  <span style={{ fontWeight: 500 }}>{g.name}</span>
+                  <span style={{ color: '#888', marginLeft: 8, fontSize: 12 }}>{g.contactPhone || g.phone || ''}</span>
+                  <div style={{ color: '#666', fontSize: 12, marginTop: 2 }}>
+                    {g.positions?.length > 0 ? g.positions.map((p: any, i: number) => (
+                      <div key={i}>
+                        <span style={{ color: '#333' }}>{p.positionTitle || p.projectName || '-'}</span>
+                        <span style={{ color: '#999', marginLeft: 8 }}>{p.recommender ? `推荐人:${p.recommender}` : ''}</span>
+                        <span style={{ color: '#999', marginLeft: 8 }}>{p.pushDate ? `${p.pushDate.substring(0, 10)}` : ''}</span>
+                        {g.positions.length > 1 && <span style={{ color: '#bbb', marginLeft: 6 }}>({i + 1}/{g.positions.length})</span>}
+                      </div>
+                    )) : <span style={{ color: '#aaa' }}>无关联岗位</span>}
+                  </div>
+                </Checkbox>
+              </div>
+            );
+          })}
+          {getExportFilteredGroups().length === 0 && (
+            <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>无符合筛选条件的候选人</div>
+          )}
+        </div>
+        </>
+        )}
       </Modal>
 
-      {/* 候选人分组列表 */}
+      {/* 列表视图 */}
+      {viewMode === 'list' && (
+        <div>
+          <div style={{ marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: '#999', fontSize: 12 }}>提示：拖动表头可调整列顺序；点击表头筛选图标，下拉框支持搜索和勾选筛选（仅自己可见）</span>
+            <Button size="small" onClick={() => { saveColOrder(DEFAULT_COL_ORDER); setListFilters({}); localStorage.removeItem(LIST_FILTERS_KEY); }}>
+              重置列顺序和筛选
+            </Button>
+          </div>
+          <Table
+            dataSource={filteredFlatList}
+            rowKey="cpId"
+            loading={loading}
+            pagination={{ pageSize: 50, showTotal: (t) => `共 ${t} 条` }}
+            scroll={{ x: 1800, y: 'calc(100vh - 350px)' }}
+            sticky
+            size="small"
+            columns={listColumns}
+            onChange={(_pg: any, filters: any) => {
+              const next: Record<string, string[]> = {};
+              Object.entries(filters).forEach(([k, v]) => {
+                if (Array.isArray(v) && v.length) next[k] = v as string[];
+              });
+              saveFilters(next);
+            }}
+          />
+        </div>
+      )}
+
+      {/* 分组视图 */}
+      {viewMode === 'grouped' && (
       <Table
         dataSource={groups}
         rowKey={(r) => `${r.name}_${r.contactPhone || r.phone}`}
@@ -762,6 +1121,8 @@ export default function CandidateList() {
         }}
       />
 
+      )}
+
       {/* 候选人详情弹窗 */}
       <Modal
         title="候选人详情"
@@ -890,6 +1251,71 @@ export default function CandidateList() {
             <Input placeholder="请输入会议链接或面试地点" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 推荐人推荐记录弹窗 */}
+      <Modal
+        title={`${recommenderName} 的推荐记录`}
+        open={recommenderModalOpen}
+        onCancel={() => { setRecommenderModalOpen(false); setRecommenderList([]); }}
+        footer={null}
+        width={800}
+        destroyOnClose
+      >
+        <Table
+          dataSource={recommenderList}
+          rowKey="cpId"
+          size="small"
+          pagination={{ pageSize: 10 }}
+          columns={[
+            {
+              title: '推荐日期',
+              key: 'date',
+              width: 110,
+              render: (_: any, r: any) => r.pushDate ? r.pushDate.substring(0, 10) : (r.recommendedAt ? r.recommendedAt.substring(0, 10) : '-'),
+            },
+            {
+              title: '姓名',
+              key: 'name',
+              width: 100,
+              render: (_: any, r: any) => r.candidateName,
+            },
+            {
+              title: '项目',
+              key: 'project',
+              width: 120,
+              render: (_: any, r: any) => r.projectName || '-',
+            },
+            {
+              title: '岗位',
+              key: 'position',
+              width: 120,
+              render: (_: any, r: any) => r.positionDuty || '-',
+            },
+            {
+              title: '简历',
+              key: 'resume',
+              width: 60,
+              render: (_: any, r: any) => r.resumeUrl ? (
+                <a href={r.resumeUrl} target="_blank" rel="noopener noreferrer">
+                  <FilePdfOutlined style={{ fontSize: 16, color: '#1890ff' }} />
+                </a>
+              ) : '-',
+            },
+            {
+              title: '分数',
+              key: 'score',
+              width: 70,
+              render: (_: any, r: any) => r.matchScore > 0 ? <MatchScoreTag score={r.matchScore} /> : '-',
+            },
+            {
+              title: '状态',
+              key: 'status',
+              width: 100,
+              render: (_: any, r: any) => <StatusTag status={r.status} type="candidate" />,
+            },
+          ]}
+        />
       </Modal>
     </div>
   );

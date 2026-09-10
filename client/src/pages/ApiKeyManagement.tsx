@@ -29,6 +29,7 @@ import {
 } from '@ant-design/icons';
 import { getSystemLlmConfig, updateSystemLlmConfig } from '../api/system-config';
 import { getProfile, updateProfile } from '../api/auth';
+import { createApiKey, listApiKeys, deleteApiKey, revokeApiKey } from '../api/api-key';
 import { useUserStore } from '../stores/user';
 
 const { Title, Paragraph, Text } = Typography;
@@ -52,7 +53,7 @@ export default function ApiKeyManagement() {
   const loadKeys = async () => {
     setLoading(true);
     try {
-      const res: any = await import('../api/api-key').then((m) => m.listApiKeys());
+      const res: any = await listApiKeys();
       setKeys(res.data || res || []);
     } catch {
       message.error('加载 API Key 列表失败');
@@ -87,7 +88,7 @@ export default function ApiKeyManagement() {
 
   const handleCreate = async (values: { name: string }) => {
     try {
-      const res: any = await import('../api/api-key').then((m) => m.createApiKey(values.name));
+      const res: any = await createApiKey(values.name);
       const data = res.data || res;
       setNewKeyData(data);
       setCreateModalVisible(false);
@@ -100,7 +101,7 @@ export default function ApiKeyManagement() {
 
   const handleDelete = async (id: number) => {
     try {
-      await import('../api/api-key').then((m) => m.deleteApiKey(id));
+      await deleteApiKey(id);
       message.success('API Key 已删除');
       loadKeys();
     } catch {
@@ -110,7 +111,7 @@ export default function ApiKeyManagement() {
 
   const handleRevoke = async (id: number) => {
     try {
-      await import('../api/api-key').then((m) => m.revokeApiKey(id));
+      await revokeApiKey(id);
       message.success('API Key 已停用');
       loadKeys();
     } catch {
@@ -407,6 +408,12 @@ export default function ApiKeyManagement() {
                   <Paragraph><Text code>POST</Text> /positions/:id/candidates/batch-remove - 批量移除候选人</Paragraph>
                   <Paragraph><Text code>PUT</Text> /candidate-position/:cpId/status - 更新候选人状态</Paragraph>
 
+                  <Title level={5}>简历文件上传（multipart/form-data）</Title>
+                  <Paragraph><Text code>POST</Text> /positions/:id/resume-upload - 上传简历文件（一步完成AI解析+创建候选人）</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions/:id/resume-upload-batch - 批量上传简历文件（一次最多20个）</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions/:id/resume-library/upload - 仅上传简历文件（返回url和提取文本）</Paragraph>
+                  <Paragraph><Text code>POST</Text> /positions/:id/resume-library/smart-upload - 用已上传文件url创建候选人</Paragraph>
+
                   <Title level={5}>候选人管理</Title>
                   <Paragraph><Text code>GET</Text> /candidates - 获取候选人列表</Paragraph>
                   <Paragraph><Text code>GET</Text> /candidates/:id - 获取候选人详情</Paragraph>
@@ -487,6 +494,23 @@ curl -X PUT ${baseUrl}/candidate-position/1/status \\
 curl -X DELETE ${baseUrl}/positions/1/candidates/1 \\
   -H "x-api-key: YOUR_API_KEY"
 
+# ===== 简历文件上传 =====
+# 一步上传简历（文件保存+AI解析+匹配/创建候选人，field名为file）
+curl -X POST ${baseUrl}/positions/1/resume-upload \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -F "file=@张三_简历.pdf"
+
+# 批量上传简历（一次最多20个，field名为files）
+curl -X POST ${baseUrl}/positions/1/resume-upload-batch \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -F "files=@张三_简历.pdf" \\
+  -F "files=@李四_简历.pdf"
+
+# 仅上传简历文件（返回url/fileName/extractedText，不创建候选人）
+curl -X POST ${baseUrl}/positions/1/resume-library/upload \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -F "file=@张三_简历.pdf"
+
 # ===== AI Agent（完整功能）=====
 # AI Agent 对话（支持搜索、导入、导出、状态更新等所有工具）
 curl -X POST ${baseUrl}/ai/agent-chat \\
@@ -561,6 +585,24 @@ resp = requests.post(f"{API_BASE}/positions/1/candidates/batch-import",
 resp = requests.put(f"{API_BASE}/candidate-position/1/status", headers=headers,
     json={"status": "interview_passed"})
 
+# ===== 简历文件上传 =====
+# 一步上传简历（文件保存+AI解析+匹配/创建候选人）
+with open("张三_简历.pdf", "rb") as f:
+    resp = requests.post(f"{API_BASE}/positions/1/resume-upload",
+        headers={"x-api-key": API_KEY},
+        files={"file": f})
+
+# 批量上传简历（一次最多20个）
+files = [("files", open("张三_简历.pdf", "rb")), ("files", open("李四_简历.pdf", "rb"))]
+resp = requests.post(f"{API_BASE}/positions/1/resume-upload-batch",
+    headers={"x-api-key": API_KEY}, files=files)
+
+# 仅上传简历文件（返回url/fileName/extractedText，不创建候选人）
+with open("张三_简历.pdf", "rb") as f:
+    resp = requests.post(f"{API_BASE}/positions/1/resume-library/upload",
+        headers={"x-api-key": API_KEY},
+        files={"file": f})
+
 # ===== AI Agent（完整功能）=====
 # AI Agent 对话（支持搜索、导入、导出、状态更新等所有工具）
 resp = requests.post(f"{API_BASE}/ai/agent-chat", headers=headers,
@@ -633,6 +675,25 @@ await fetch(API_BASE + "/positions/1/candidates", {
 await fetch(API_BASE + "/candidate-position/1/status", {
   method: "PUT", headers,
   body: JSON.stringify({ status: "interview_passed" }),
+}).then(r => r.json());
+
+// ===== 简历文件上传 =====
+// 一步上传简历（文件保存+AI解析+匹配/创建候选人）
+const resumeForm = new FormData();
+resumeForm.append("file", fileInput.files[0]);
+const uploadResult = await fetch(API_BASE + "/positions/1/resume-upload", {
+  method: "POST",
+  headers: { "x-api-key": API_KEY },
+  body: resumeForm,
+}).then(r => r.json());
+
+// 批量上传简历（一次最多20个）
+const batchForm = new FormData();
+for (const file of fileInput.files) batchForm.append("files", file);
+const batchResult = await fetch(API_BASE + "/positions/1/resume-upload-batch", {
+  method: "POST",
+  headers: { "x-api-key": API_KEY },
+  body: batchForm,
 }).then(r => r.json());
 
 // ===== AI Agent（完整功能）=====

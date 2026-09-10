@@ -42,9 +42,20 @@ async function bootstrap() {
     });
   });
 
+  // 提供前端静态文件（本地部署模式）
+  const frontendPath = join(__dirname, '..', '..', 'client', 'dist');
+  app.use(express.static(frontendPath));
+  // SPA 回退：所有非 API/非 uploads 请求返回 index.html
+  app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) {
+      return next();
+    }
+    res.sendFile(join(frontendPath, 'index.html'));
+  });
+
   const port = process.env.PORT || 3000;
   const host = process.env.HOST || '0.0.0.0';
   await app.listen(port, host);
-  console.log(`Application is running on: http://${host}:${port}/api`);
+  console.log(`Application is running on: http://${host}:${port}`);
 }
 bootstrap();
